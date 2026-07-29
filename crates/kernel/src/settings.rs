@@ -1,5 +1,5 @@
 use crate::Result;
-use anylm::{AiOptions, ApiKind};
+use anylm::{api::ApiKind, options::Options};
 use atoman::{Config, State, StateGuard};
 use macron::str;
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,9 @@ static SETTINGS: State<Config<Settings>> = State::default();
 /// The server options
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerOptions {
+    /// The network port for the server to listen on
     pub port: u16,
+    /// The maximum number of logs to retain in memory or storage
     pub max_logs: usize,
 }
 
@@ -89,47 +91,123 @@ impl ::std::default::Default for ServerOptions {
     }
 }
 
-/// The AI prompt options
+/// The execution control options for assistant runs
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AssistantOptions {
+pub struct ExecutionOptions {
+    /// The number of recent messages to preserve during context compression
     pub preserve_messages: usize,
+    /// The maximum number of retries for failed AI calls
     pub max_retries: usize,
-    pub system_prompt: String,
-    pub assist_prompt: String,
-    pub control_prompt: String,
-    pub compress_prompt: String,
-    pub completions: AiOptions,
-    pub compression: AiOptions,
-    pub embeddings: AiOptions,
 }
 
-impl ::std::default::Default for AssistantOptions {
+impl ::std::default::Default for ExecutionOptions {
     fn default() -> Self {
-        let mut completions = AiOptions::default();
-
-        completions.kind = ApiKind::Cerebras;
-        completions.env_var.replace(str!("CEREBRAS_API_KEY"));
-        completions.model = str!("gpt-oss-120b");
-        completions.temperature.replace(0.6);
-        completions.max_tokens.replace(16_384);
-
-        let mut compression = completions.clone();
-        compression.temperature.replace(0.4);
-
-        let mut embeddings = AiOptions::default();
-        embeddings.kind = ApiKind::LmStudio;
-        embeddings.model = str!("text-embedding-nomic-embed-text-v1.5@q8_0");
-
         Self {
             preserve_messages: 2,
             max_retries: 5,
+        }
+    }
+}
+
+/// The JavaScript runtime options
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeOptions {
+    /// Maximum number of VM instructions per run
+    pub instruction_limit: Option<u64>,
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            instruction_limit: Some(5_000_000), // ~20-50ms
+        }
+    }
+}
+
+/// The main completions pipeline options
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompletionsOptions {
+    /// The base system prompt template
+    pub system_prompt: String,
+    /// The primary assistant role and behavior prompt
+    pub assist_prompt: String,
+    /// The control prompt for evaluating agent task execution
+    pub control_prompt: String,
+    /// Model and provider parameters for completions
+    pub options: Options,
+}
+
+impl ::std::default::Default for CompletionsOptions {
+    fn default() -> Self {
+        let mut options = Options::default();
+        options.kind = ApiKind::OpenAi;
+        options.base_url = Some(str!("http://127.0.0.1:1234"));
+        options.model = str!("qwen3-vl-4b");
+        options.temperature.replace(0.8);
+        options.max_tokens.replace(16_384);
+
+        Self {
             system_prompt: str!(SYSTEM_PROMPT.trim()),
             assist_prompt: str!(ASSISTANT_PROMPT.trim()),
             control_prompt: str!(CONTROL_PROMPT.trim()),
-            compress_prompt: str!(COMPRESSION_PROMPT.trim()),
-            completions,
-            compression,
-            embeddings,
+            options,
+        }
+    }
+}
+
+/// The context compression pipeline options
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompressionOptions {
+    /// The prompt used for summarizing and compressing context
+    pub prompt: String,
+    /// Model and provider parameters for compression
+    pub options: Option<Options>,
+}
+
+impl ::std::default::Default for CompressionOptions {
+    fn default() -> Self {
+        Self {
+            prompt: str!(COMPRESSION_PROMPT.trim()),
+            options: None,
+        }
+    }
+}
+
+/// The text embeddings pipeline options
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmbeddingsOptions {
+    /// Model and provider parameters for embeddings
+    pub options: Options,
+}
+
+impl ::std::default::Default for EmbeddingsOptions {
+    fn default() -> Self {
+        let mut options = Options::default();
+        options.kind = ApiKind::OpenAi;
+        options.base_url = Some(str!("http://127.0.0.1:1234"));
+        options.model = str!("text-embedding-nomic-embed-text-v1.5@q8_0");
+
+        Self { options }
+    }
+}
+
+/// The context and RAG memory options
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContextOptions {
+    /// Default similarity threshold for RAG retrieval
+    pub fact_similarity: f32,
+    /// Threshold for deduplication or overwriting facts in save_fact
+    pub dedup_similarity: f32,
+    /// Maximum facts to retrieve per query
+    pub search_limit: usize,
+}
+
+impl ::std::default::Default for ContextOptions {
+    fn default() -> Self {
+        Self {
+            fact_similarity: 0.2,
+            dedup_similarity: 0.82,
+            search_limit: 10,
         }
     }
 }
@@ -137,7 +215,9 @@ impl ::std::default::Default for AssistantOptions {
 /// The query cache options
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CacheOptions {
+    /// Flag indicating whether response caching is enabled
     pub enable: bool,
+    /// The similarity coefficient threshold required for a cache hit
     pub coefficient: f32,
 }
 
@@ -153,8 +233,21 @@ impl ::std::default::Default for CacheOptions {
 /// The settings
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
+    /// Server infrastructure settings
     pub server: ServerOptions,
-    pub assistant: AssistantOptions,
+    /// Execution control options for assistant runs
+    pub execution: ExecutionOptions,
+    /// JavaScript runtime options
+    pub runtime: RuntimeOptions,
+    /// Main completions pipeline options
+    pub completions: CompletionsOptions,
+    /// Context compression pipeline options
+    pub compression: CompressionOptions,
+    /// Text embeddings pipeline options
+    pub embeddings: EmbeddingsOptions,
+    /// RAG memory and context settings
+    pub context: ContextOptions,
+    /// Response caching settings
     pub cache: CacheOptions,
 }
 

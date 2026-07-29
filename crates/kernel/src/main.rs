@@ -17,26 +17,24 @@ pub mod error;
 pub mod prelude;
 pub mod settings;
 
-pub mod runtime;
-pub use runtime::Runtime;
-
+pub mod context;
 pub mod manager;
-pub use manager::{Agent, Manager};
-
+pub mod runtime;
 pub mod session;
-pub use session::Session;
 
 pub mod commands;
 pub mod handlers;
+pub mod skills;
 
 pub mod chat;
 
 use clap::{Parser, Subcommand};
+use manager::Manager;
 use pearce::Server;
 use prelude::*;
 
 pub const APP_NAME: &str = "ovsy";
-pub const APP_VERSION: &str = "0.14.4";
+pub const APP_VERSION: &str = "0.15.0";
 
 /// The Ovsy CLI commands parser
 #[derive(Parser)]
@@ -121,7 +119,7 @@ async fn serve() -> Result<()> {
     use handlers as hands;
 
     // init logger & agents manager:
-    Logger::init(path!("$cache$/logs"), Settings::get().server.max_logs).await?;
+    Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
     Manager::init().await?;
 
     // start server:

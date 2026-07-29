@@ -1,7 +1,7 @@
 use super::ChatAction;
 use crate::prelude::*;
 
-use anylm::Messages;
+use anylm::api::Messages;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::UnboundedSender;
 

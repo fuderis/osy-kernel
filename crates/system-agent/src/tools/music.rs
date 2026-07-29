@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use anylm::{Schema, Tool};
+use anylm::api::{Schema, Tool};
 use music_index::{MusicIndexer, SearchIntent};
 
 static MUSIC_INDEX: State<Option<MusicIndexer>> = State::default();

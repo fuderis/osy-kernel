@@ -1,7 +1,7 @@
 use super::Task;
-use crate::{Session, prelude::*};
+use crate::{prelude::*, session::Session};
 
-use anylm::{Content, Messages};
+use anylm::api::{Content, Messages};
 use tokio::task::JoinHandle;
 
 /// The agent tasks worflow

@@ -1,4 +1,4 @@
-use anylm::Message;
+use anylm::api::Message;
 use serde::{Deserialize, Serialize};
 
 /// The user sessions list query

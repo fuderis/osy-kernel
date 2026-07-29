@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::prelude::*;
-use anylm::{Content, Messages};
+use anylm::api::{Content, Messages};
 
 use ratatui::{
     Frame,
@@ -162,19 +162,13 @@ fn render_input(f: &mut Frame, area: Rect, app: &mut AppState, prefix: &str) {
     };
     let input_style = Style::default().fg(input_color);
 
-    let max_tokens = Settings::get()
-        .assistant
-        .completions
-        .max_tokens
-        .unwrap_or(1) as usize;
+    let ops = &Settings::get().completions.options;
+    let max_tokens = ops.max_tokens.unwrap_or(1) as usize;
     let tokens_count = &app.messages.dirty_get().tokens_count;
 
     let title_left = Line::from(vec![
         Span::raw(" "),
-        Span::styled(
-            Settings::get().assistant.completions.model.clone(),
-            title_style,
-        ),
+        Span::styled(ops.model.clone(), title_style),
         Span::raw(" "),
         Span::styled(format!("({}/{})", tokens_count, max_tokens), input_style),
         Span::raw(" "),

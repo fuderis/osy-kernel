@@ -23,8 +23,8 @@ ovsy-share = { path = "crates/share" }
 macron = { version = "0.4.2", features = ["full"] }
 atoman = { version = "0.4.4", features = ["full"] }
 pearce = { version = "0.3.3", features = ["full"] }
-anylm = "0.1.25"
-cistern = { version = "0.2.0", features = ["kv"] }
+anylm = { version = "0.2.2", features = ["full"] }
+cistern = { version = "0.2.0", features = ["full"] }
 tokio = { version = "1.51.0", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

@@ -1,4 +1,4 @@
-use anylm::Message;
+use anylm::api::Message;
 
 /// Counts the tokens count
 pub fn count_tokens(msgs: &Vec<Message>) -> usize {

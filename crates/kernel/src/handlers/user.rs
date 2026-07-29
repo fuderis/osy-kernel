@@ -21,6 +21,10 @@ pub async fn handle_list(uid: Paths<u128>, data: Json<UserSessionsQuery>) -> Res
 async fn search_sessions(user_id: u128, limit: usize) -> Result<Vec<SessionId>> {
     let sessions_dir = path!("$share$/userdata/{user_id}/sessions");
 
+    if !sessions_dir.exists() {
+        return Ok(vec![]);
+    }
+
     // open sessions dir:
     let mut entries = match fs::read_dir(&sessions_dir).await {
         Ok(entries) => entries,

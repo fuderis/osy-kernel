@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use anylm::api::Tool;
 
 /// The agent skill name
 #[derive(Clone, Copy, Debug, Display, Serialize, Deserialize, Eq, PartialEq)]
@@ -17,14 +18,14 @@ pub struct Skill {
     pub name: SkillName,
     pub description: &'static str,
     #[serde(skip)]
-    pub tools_list: fn() -> Vec<anylm::Tool>,
+    pub tools_list: fn() -> Vec<Tool>,
 }
 
 impl Skill {
     pub const fn new(
         name: SkillName,
         description: &'static str,
-        tools_list: fn() -> Vec<anylm::Tool>,
+        tools_list: fn() -> Vec<Tool>,
     ) -> Self {
         Self {
             name,
@@ -33,7 +34,7 @@ impl Skill {
         }
     }
 
-    pub fn tools_list(&self) -> Vec<anylm::Tool> {
+    pub fn tools_list(&self) -> Vec<Tool> {
         (self.tools_list)()
     }
 }

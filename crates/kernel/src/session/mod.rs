@@ -4,29 +4,48 @@ use key::Key;
 pub mod metadata;
 use metadata::Metadata;
 
-use crate::prelude::*;
+use crate::{context::UserFact, prelude::*};
 
-use anylm::Message;
-use cistern::{Cistern, Kv};
+use anylm::api::Message;
+use cistern::{Cistern, Kv, Rag};
 use ovsy_share::{SessionId, SessionInfo};
 
-type SharedSession = Arc<Mutex<Session>>;
 static SESSIONS: State<HashMap<SessionId, SharedSession>> = State::default();
+
+type SharedSession = Arc<Mutex<Session>>;
 
 /// The user session manager
 #[derive(Clone)]
 pub struct Session {
+    /// Unique identifier of the active session
     pub id: SessionId,
+    /// Runtime environment info and metadata for the session
     pub info: SessionInfo,
-    pub db: Arc<Cistern<Kv>>,
+    /// Key-Value storage instance for session chat history and metadata
+    pub kv_db: Arc<Cistern<Kv>>,
+    /// Vector RAG database instance for user-specific long-term memory/facts
+    pub rag_db: Arc<Cistern<Rag>>,
 }
 
 impl Session {
     /// Initializes the user session instance
     pub async fn init(id: SessionId, info: SessionInfo) -> Result<SharedSession> {
-        let dir = path!("$share$/userdata/{}/sessions/{id}", id.user_id);
-        let db = arc!(Cistern::connect(dir).await?);
-        let this = arc_mutex!(Self { id, info, db });
+        let user_dir = path!("$share$/userdata/{}", id.user_id);
+
+        // session kv database path
+        let session_dir = user_dir.join("sessions").join(id.to_string());
+        let kv_db = arc!(Cistern::connect(session_dir).await?);
+
+        // global user rag database path
+        let facts_dir = user_dir.join("facts");
+        let rag_db = arc!(Cistern::connect(facts_dir).await?);
+
+        let this = arc_mutex!(Self {
+            id,
+            info,
+            kv_db,
+            rag_db,
+        });
 
         SESSIONS.lock().await.insert(id, this.clone());
         Ok(this)
@@ -41,7 +60,7 @@ impl Session {
     pub async fn finish(id: &SessionId) -> Result<()> {
         if let Some(session) = SESSIONS.lock().await.remove(id) {
             let table_name = Self::table_name(id);
-            let table = session.lock().await.db.open_table(&table_name).await?;
+            let table = session.lock().await.kv_db.open_table(&table_name).await?;
             table.flush().await?;
         }
         Ok(())
@@ -50,7 +69,7 @@ impl Session {
     /// Reads the session metadata
     pub async fn read_metadata(&self) -> Result<Option<Metadata>> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
         table.read(Key::Metadata).await
     }
@@ -58,9 +77,8 @@ impl Session {
     /// Reads all the session messages
     pub async fn read_messages(&self) -> Result<Vec<Message>> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata or create a new one:
         let meta = match table.read(Key::Metadata).await? {
             Some(meta) => meta,
             None => {
@@ -71,7 +89,6 @@ impl Session {
             }
         };
 
-        // read messages by indexes:
         let start_idx = meta.compressed_until;
         let end_idx = meta.message_count as usize;
 
@@ -89,19 +106,16 @@ impl Session {
     /// Writes a new message to the session
     pub async fn write_message(&self, message: Message) -> Result<()> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata:
         let mut meta: Metadata = table
             .read(Key::Metadata)
             .await?
             .unwrap_or(Metadata::new(self.id));
 
-        // gen key for new message:
         let msg_key = Key::Message(meta.message_count as usize);
         table.write(msg_key, message).await?;
 
-        // update messages count:
         meta.message_count += 1;
         table.write(Key::Metadata, meta).await?;
         table.flush().await?;
@@ -109,25 +123,22 @@ impl Session {
         Ok(())
     }
 
-    /// Writes a new messages to the session
+    /// Writes new messages to the session
     pub async fn write_messages(&self, messages: Vec<Message>) -> Result<()> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata:
         let mut meta: Metadata = table
             .read(Key::Metadata)
             .await?
             .unwrap_or(Metadata::new(self.id));
 
         for message in messages {
-            // gen key for new message:
             let msg_key = Key::Message(meta.message_count as usize);
             table.write(msg_key, message).await?;
             meta.message_count += 1;
         }
 
-        // update messages count:
         table.write(Key::Metadata, meta).await?;
         table.flush().await?;
 
@@ -142,7 +153,7 @@ impl Session {
         compress_count: usize,
     ) -> Result<()> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
         let current_meta = table
             .read::<_, Metadata>(Key::Metadata)
@@ -178,9 +189,8 @@ impl Session {
     /// Completely clears the session message history
     pub async fn clear(&self) -> Result<()> {
         let table_name = Self::table_name(&self.id);
-        let table = self.db.open_table(&table_name).await?;
+        let table = self.kv_db.open_table(&table_name).await?;
 
-        // remove all messages:
         if let Some(meta) = table.read::<_, Metadata>(Key::Metadata).await? {
             let start_idx = meta.compressed_until;
             let end_idx = meta.message_count as usize;
@@ -190,7 +200,6 @@ impl Session {
             }
         }
 
-        // write new metadata:
         let fresh_meta = Metadata::new(self.id);
         table.write(Key::Metadata, fresh_meta).await?;
         table.flush().await?;
@@ -198,8 +207,75 @@ impl Session {
         Ok(())
     }
 
-    /// Creates the table name by session id
     fn table_name(session_id: &SessionId) -> String {
         str!("{session_id}")
+    }
+}
+
+// Global user RAG methods
+impl Session {
+    fn facts_table_name() -> String {
+        "facts".into()
+    }
+
+    /// Saves a new user fact while removing previous similar entries
+    pub async fn save_fact(&self, embedding: Vec<f32>, text: String) -> Result<()> {
+        let table_name = Self::facts_table_name();
+        let table = self.rag_db.open_table(&table_name).await?;
+        let dedup_threshold = Settings::get().context.dedup_similarity;
+
+        // search for existing close duplicates
+        if let Ok(Some(similar_facts)) = table
+            .read::<UserFact>(embedding.clone(), 5, dedup_threshold)
+            .await
+        {
+            for record in similar_facts {
+                // skip saving if exact duplicate exists
+                if record.data.text.trim().eq_ignore_ascii_case(text.trim()) {
+                    return Ok(());
+                }
+
+                // remove stale or outdated fact before replacing
+                let _ = table.remove(record.id).await;
+            }
+        }
+
+        // write new fact
+        let fact = UserFact {
+            text,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        table.write(embedding, fact).await?;
+        Ok(())
+    }
+
+    /// Searches for relevant user facts across all sessions
+    pub async fn search_facts(
+        &self,
+        query_embedding: Vec<f32>,
+        limit: usize,
+        distance_threshold: f32,
+    ) -> Result<Vec<cistern::RagRecord<UserFact>>> {
+        let table_name = Self::facts_table_name();
+        let table = self.rag_db.open_table(&table_name).await?;
+
+        let records = table
+            .read(query_embedding, limit, distance_threshold)
+            .await?;
+
+        Ok(records.unwrap_or_default())
+    }
+
+    /// Removes a fact by its ID
+    pub async fn remove_fact(&self, fact_id: u64) -> Result<()> {
+        let table_name = Self::facts_table_name();
+        let table = self.rag_db.open_table(&table_name).await?;
+
+        table.remove(fact_id).await?;
+        Ok(())
     }
 }

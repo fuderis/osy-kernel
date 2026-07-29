@@ -4,7 +4,7 @@ use crate::{
     prelude::*,
 };
 
-use anylm::{Message, Messages};
+use anylm::api::{Message, Messages};
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEventKind},
     execute,
@@ -446,7 +446,7 @@ async fn chat_worker(
                                 let preserve = args
                                     .get(1)
                                     .and_then(|i| i.trim().parse::<usize>().ok())
-                                    .unwrap_or_else(|| Settings::get().assistant.preserve_messages);
+                                    .unwrap_or_else(|| Settings::get().execution.preserve_messages);
 
                                 let res = Client::tcp()
                                     .post(&str!("{base_url}/sessions/{session_id}/compact"))
@@ -547,7 +547,7 @@ async fn handle_event(app: &mut AppState, msgs: &mut StateGuard<Messages>, event
         }
 
         EventKind::Start => {
-            let tool_calls: Vec<anylm::ToolCall> = serde_json::from_str(&text).unwrap();
+            let tool_calls: Vec<anylm::api::ToolCall> = serde_json::from_str(&text).unwrap();
             if let Some(msg) = msgs.messages.get_mut(app.response_index) {
                 msg.tool_calls.extend(tool_calls);
                 msg.count_tokens();

@@ -1,36 +1,9 @@
 use super::Tasks;
-use crate::prelude::*;
+use crate::{prelude::*, skills::task::TaskAction};
 
-use anylm::Content;
+use anylm::api::Content;
 use ovsy_share::{Event, EventTaskInfo};
-use std::{
-    collections::HashSet,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-/// The agent task info
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct TaskAction {
-    #[serde(default = "TaskAction::random_id")]
-    pub task_id: i64,
-    #[serde(default)]
-    pub tool_call_id: String,
-    pub agent_name: String,
-    pub agent_skills: Vec<String>,
-    pub task_query: String,
-    #[serde(default)]
-    pub depend_tasks: HashSet<i64>,
-}
-
-impl TaskAction {
-    /// Generates the random task ID
-    fn random_id() -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64
-    }
-}
+use std::collections::HashSet;
 
 /// The agent tasks handle
 #[derive(Clone)]

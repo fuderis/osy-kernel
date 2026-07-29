@@ -8,12 +8,12 @@ use crate::{
 static SETTINGS: State<Config<Settings>> = State::default();
 
 const NAME: &str = "system-agent";
+
 const DESCRIPTION: &str = r#"
 Local system management agent. Provides hardware information, live system metrics,
 desktop appearance management, power control, audio volume adjustment, media playback
 control and local music library search.
 "#;
-const VERSION: &str = "0.2.0";
 
 const PROMPT: &str = r#"
 You are the System Manager agent.
@@ -67,7 +67,7 @@ pub struct AgentMetadata {
 }
 
 impl AgentMetadata {
-    pub fn tools(&self, skills: Vec<SkillName>) -> Vec<anylm::Tool> {
+    pub fn tools(&self, skills: Vec<SkillName>) -> Vec<anylm::api::Tool> {
         if skills.is_empty() {
             self.skills.iter().flat_map(Skill::tools_list).collect()
         } else {
@@ -85,7 +85,7 @@ impl ::std::default::Default for AgentMetadata {
         Self {
             name: NAME,
             description: DESCRIPTION,
-            version: VERSION,
+            version: APP_VERSION,
             prompt: PROMPT,
             skills: SKILLS,
         }

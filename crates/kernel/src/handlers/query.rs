@@ -1,6 +1,10 @@
-use crate::{Runtime, Session, manager::*, prelude::*, settings::AssistantOptions};
+use crate::{context, manager::*, prelude::*, runtime::Runtime, session::Session, skills};
 
-use anylm::{AiChunk, Completions, Content, Message, Messages};
+use anylm::{
+    api::{Content, Message, Messages},
+    completions::{Chunk, Completions},
+    embeddings::EmbeddingSearch,
+};
 use chrono::FixedOffset;
 use ovsy_share::{Event, EventKind, HandleQuery, SessionInfo};
 use std::collections::HashSet;
@@ -30,7 +34,6 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
 async fn read_session(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<Messages>>)> {
     info!("Reading the user session...");
 
-    // init session & read messages:
     let Some(session) = Session::get(&sid) else {
         return Err(Error::UnknownSessionId(sid).into());
     };
@@ -51,15 +54,56 @@ async fn handle_query(
 ) -> Result<()> {
     info!("Processing the user query...");
 
-    let ai_conf = &Settings::get().assistant;
-    let options = ai_conf.completions.clone();
+    let settings = Settings::get();
+    let completions_options = settings.completions.options.clone();
+    let exec_options = &settings.execution;
+    let context_options = &settings.context;
 
-    // prepare messages:
+    // 1. RAG: Search for relevant facts about the user
+    let session_guard = session.lock().await;
+    let mut facts_prompt = String::new();
+
+    if let Some(user_text) = context::extract_text_from_msg(&message) {
+        if let Ok(query_vec) = context::generate_embedding(&user_text, EmbeddingSearch::Query).await
+        {
+            if let Ok(facts) = session_guard
+                .search_facts(
+                    query_vec,
+                    context_options.search_limit,
+                    context_options.fact_similarity,
+                )
+                .await
+            {
+                if !facts.is_empty() {
+                    info!(
+                        "Loaded {} facts for sid={}: {:?}",
+                        facts.len(),
+                        sid,
+                        facts.iter().map(|f| &f.data.text).collect::<Vec<_>>()
+                    );
+
+                    facts_prompt.push_str("\n\n### Loaded User Facts (use them when writing the answer, if necessary):\n");
+                    for record in facts {
+                        facts_prompt
+                            .push_str(&format!("  * [ID: {}] {}\n", record.id, record.data.text));
+                    }
+                } else {
+                    info!("No relevant facts found for user query.");
+                }
+            }
+        }
+    }
+
+    // 2. Preparing the context and system promptes
     let raw_messages = messages.lock().await.messages.clone();
+    let base_system_prompt = system_prompt(&session_guard.info, &settings);
+    drop(session_guard);
+
     let messages = Messages::from(raw_messages)
         .system(vec![
-            system_prompt(&session.lock().await.info, &ai_conf).into(),
-            ai_conf
+            format!("{base_system_prompt}{facts_prompt}").into(),
+            settings
+                .completions
                 .assist_prompt
                 .replace("{AGENTS_LIST}", &Manager::agents_list_doc().await)
                 .into(),
@@ -69,23 +113,19 @@ async fn handle_query(
 
     let mut tasks_list = vec![];
     let mut evals_list = vec![];
-    let mut retry_count = 0;
-    let max_retries = ai_conf.max_retries.max(1) as usize;
+    let mut memory_results = vec![];
 
-    #[derive(Deserialize)]
-    struct EvalAction {
-        task_id: Option<i64>,
-        parameter: Option<String>,
-        code: String,
-    }
+    let mut retry_count = 0;
+    let max_retries = exec_options.max_retries.max(1);
 
     // top-level generation cycle: task planning
     loop {
         tasks_list.clear();
         evals_list.clear();
+        memory_results.clear();
         let mut text_response = str!();
 
-        let mut response = match Completions::try_from(options.clone())?
+        let mut response = match Completions::try_from(completions_options.clone())?
             .tools(Manager::basic_tools().await)
             .send(messages.clone())
             .await
@@ -111,14 +151,14 @@ async fn handle_query(
         let mut chunk_error = None;
         while let Some(chunk) = response.next().await {
             match chunk {
-                Ok(AiChunk::Text(text_part)) => {
+                Ok(Chunk::Text(text_part)) => {
                     text_response.push_str(&text_part);
                     // streaming plain text to the user
                     tx.send(Event::answer(text_part))?;
                 }
 
-                Ok(AiChunk::Tool(tool_call)) => match tool_call.func.name.as_ref() {
-                    "handle_agent" => match tool_call.parse_args::<TaskAction>() {
+                Ok(Chunk::Tool(tool_call)) => match tool_call.func.name.as_ref() {
+                    "handle_agent" => match tool_call.parse_args::<skills::task::TaskAction>() {
                         Ok(mut task) => {
                             task.tool_call_id = tool_call.id;
                             tasks_list.push(task);
@@ -128,12 +168,50 @@ async fn handle_query(
                             break;
                         }
                     },
-                    "javascript_eval" => match tool_call.parse_args::<EvalAction>() {
+
+                    "javascript_eval" => match tool_call.parse_args::<skills::eval::EvalAction>() {
                         Ok(eval) => {
                             evals_list.push((tool_call.id, eval));
                         }
                         Err(e) => {
                             chunk_error = Some(str!("Failed to parse javascript_eval: {e}").into());
+                            break;
+                        }
+                    },
+
+                    "remember_fact" => match tool_call
+                        .parse_args::<skills::fact::RememberFactAction>()
+                    {
+                        Ok(act) => {
+                            let s = session.lock().await;
+                            match context::fact::handle_remember(&s, act.fact).await {
+                                Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
+                                Err(e) => {
+                                    chunk_error = Some(str!("Failed to save fact: {e}").into());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            chunk_error = Some(str!("Failed to parse remember_fact: {e}").into());
+                            break;
+                        }
+                    },
+
+                    "forget_fact" => match tool_call.parse_args::<skills::fact::ForgetFactAction>()
+                    {
+                        Ok(act) => {
+                            let s = session.lock().await;
+                            match context::fact::handle_forget(&s, act.fact_id).await {
+                                Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
+                                Err(e) => {
+                                    chunk_error = Some(str!("Failed to remove fact: {e}").into());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            chunk_error = Some(str!("Failed to parse forget_fact: {e}").into());
                             break;
                         }
                     },
@@ -160,15 +238,19 @@ async fn handle_query(
             }
         }
 
-        // hallucination check (if there is no text, no tasks, no JS calculations)
-        if tasks_list.is_empty() && evals_list.is_empty() && text_response.trim().is_empty() {
+        // hallucination check (if there is no text, no tasks, no JS calculations, and no memory operations)
+        if tasks_list.is_empty()
+            && evals_list.is_empty()
+            && memory_results.is_empty()
+            && text_response.trim().is_empty()
+        {
             retry_count += 1;
             if retry_count < max_retries {
                 warn!(
                     "Model hallucinated: empty text response and no tool calls. Retrying ({retry_count}/{max_retries})..."
                 );
                 messages.lock().await.add_user(vec![
-                    "You returned an empty response. If you need to solve the task, delegate work to an agent (using handle_agent) or execute JS (using javascript_eval).".into()
+                    "You returned an empty response. If you need to solve the task, delegate work to an agent, execute JS, or use memory tools.".into()
                 ]);
                 continue;
             } else {
@@ -177,6 +259,11 @@ async fn handle_query(
         }
 
         break;
+    }
+
+    // if the model has performed memory operations, notify the user
+    for (tool_call_id, res_text) in memory_results {
+        tx.send(Event::think(format!("{res_text}")).raw_task_info(0, tool_call_id))?;
     }
 
     // performing JS calculations (if any)
@@ -337,7 +424,9 @@ pub async fn handle_agent(
         .json(&json!({ "skills": task.skills }))
         .send()
         .await?;
-    let tools = response.json::<Vec<anylm::Tool>>().await?;
+    let tools = response.json::<Vec<anylm::api::Tool>>().await?;
+
+    // warn!("Received Tools List: {tools:#?}"); // DEBUG
 
     // logging and sending the start event
     let log_query = task
@@ -345,8 +434,8 @@ pub async fn handle_agent(
         .chars()
         .take(40)
         .collect::<String>()
-        .trim_end_matches(".")
-        .replace("\n", "\\n");
+        .trim_end_matches('.')
+        .replace('\n', "\\n");
 
     info!("Handling `{}` agent: \"{log_query}...\"", task.agent);
     tx.send(
@@ -358,11 +447,12 @@ pub async fn handle_agent(
     )
     .ok();
 
-    let ai_conf = &Settings::get().assistant;
-    let options = ai_conf.completions.clone();
+    let settings = Settings::get();
+    let options = settings.completions.options.clone();
+    let exec_options = &settings.execution;
 
     // 3. Creating a local context for generating
-    let system_pr = system_prompt(&session.lock().await.info, &ai_conf);
+    let system_pr = system_prompt(&session.lock().await.info, &settings);
 
     // collect the context in a text block for the system prompt
     let context_items = task
@@ -390,9 +480,11 @@ pub async fn handle_agent(
         ])
         .wrap();
 
+    // warn!("{agent_messages:#?}"); // DEBUG
+
     let mut tool_calls = vec![];
     let mut retry_count = 0;
-    let max_retries = Settings::get().assistant.max_retries.max(1) as usize;
+    let max_retries = exec_options.max_retries.max(1);
 
     // the self-healing cycle
     loop {
@@ -409,12 +501,12 @@ pub async fn handle_agent(
                 let mut chunk_error = None;
                 while let Some(chunk) = response.next().await {
                     match chunk {
-                        Ok(AiChunk::Text(text_part)) => {
+                        Ok(Chunk::Text(text_part)) => {
                             text_response.push_str(&text_part);
                             tx.send(Event::answer(text_part).task_info(task.info()))?;
                         }
 
-                        Ok(AiChunk::Tool(tool_call)) => {
+                        Ok(Chunk::Tool(tool_call)) => {
                             tool_calls.push(tool_call);
                         }
 
@@ -524,7 +616,7 @@ pub async fn handle_agent(
 
             workers.spawn(async move {
                 let func = tool_call.func;
-                let log_json = func.json_str.replace("\n", "\\n");
+                let log_json = func.json_str.replace('\n', "\\n");
 
                 info!("Calling `{} -> {}` tool: {log_json}", task.agent, func.name);
                 tx.send(
@@ -589,9 +681,6 @@ pub async fn handle_agent(
                 let mut full_text = str!();
 
                 while let Some(event) = stream.recv().await? {
-                    // TODO: Перехват интерактивных событий подтверждения (Confirmation events)
-                    // TODO: Обработка событий ввода доп. данных (User input injects)
-
                     match event.kind {
                         EventKind::Answer => {
                             full_text.push_str(&event.text);
@@ -649,7 +738,7 @@ pub async fn handle_agent(
     if task.is_last().await {
         info!("All parallel tasks completed. Launching control query...");
 
-        let control_msg = Message::user(vec![ai_conf.control_prompt.as_str().into()]);
+        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()]);
         let sid = session.lock().await.id;
 
         if let Err(e) = handle_query(
@@ -670,11 +759,12 @@ pub async fn handle_agent(
 }
 
 /// Generates the system prompt
-fn system_prompt(info: &SessionInfo, ai_conf: &AssistantOptions) -> String {
+fn system_prompt(info: &SessionInfo, settings: &Settings) -> String {
     let now_utc = Utc::now();
     let now_local = now_local(info.timezone);
 
-    ai_conf
+    settings
+        .completions
         .system_prompt
         .trim()
         .replace(

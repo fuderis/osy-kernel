@@ -51,12 +51,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // init settings && logger:
-    Settings::init(path!("$config/ovsy/config.toml")).await?;
-    Logger::init(
-        path!("$cache$/logs/system"),
-        Settings::get().server.max_logs,
-    )
-    .await?;
+    Settings::init(path!("$config$/config.toml")).await?;
+    Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
 
     // Handle subcommands
     match args.command {

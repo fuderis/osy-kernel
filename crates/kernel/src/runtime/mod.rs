@@ -1,16 +1,24 @@
 use crate::prelude::*;
-use boa_engine::{Context, JsValue, Source, value::TryFromJs};
+use boa_engine::{Context, JsValue, Source, value::TryFromJs, vm::RuntimeLimits};
 
 pub struct Runtime {
     context: Context,
 }
 
 impl Runtime {
-    /// Creates a new JavaScript runtime.
+    /// Creates a new JavaScript runtime with configured limits.
     pub fn new() -> Self {
-        Self {
-            context: Context::default(),
+        let mut context = Context::default();
+        let runtime_settings = &Settings::get().runtime;
+
+        if let Some(limit) = runtime_settings.instruction_limit {
+            // creating a limit configuration
+            let mut limits = RuntimeLimits::default();
+            limits.set_loop_iteration_limit(limit);
+            context.set_runtime_limits(limits);
         }
+
+        Self { context }
     }
 
     /// Evaluates JavaScript and returns the result as a string.
@@ -18,9 +26,9 @@ impl Runtime {
         let value = self
             .context
             .eval(Source::from_bytes(code))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("JS Execution Error: {e}"))?;
 
-        Ok(js_to_string(&value, &mut self.context).map_err(|e| e.to_string())?)
+        js_to_string(&value, &mut self.context).map_err(|e| e.to_string().into())
     }
 
     /// Evaluates JavaScript and converts the result to a Rust type.
@@ -31,14 +39,20 @@ impl Runtime {
         let value = self
             .context
             .eval(Source::from_bytes(code))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("JS Execution Error: {e}"))?;
 
-        Ok(T::try_from_js(&value, &mut self.context).map_err(|e| e.to_string())?)
+        T::try_from_js(&value, &mut self.context).map_err(|e| e.to_string().into())
     }
 
-    /// Clears the runtime by creating a fresh Context.
+    /// Clears the runtime by creating a fresh Context with default settings.
     pub fn reset(&mut self) {
-        self.context = Context::default();
+        *self = Self::new();
+    }
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

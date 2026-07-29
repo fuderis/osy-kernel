@@ -22,4 +22,7 @@ pub enum Error {
 
     #[display(fmt = "The TypeScript runtime is not initialized, check logs")]
     RuntimeNotInitialized,
+
+    #[display(fmt = "No embedding received from provider")]
+    NoEmbeddingReceived,
 }

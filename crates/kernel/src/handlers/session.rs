@@ -1,5 +1,9 @@
-use crate::{Session, prelude::*};
-use anylm::{AiChunk, Completions, Message, Messages};
+use crate::{prelude::*, session::Session};
+
+use anylm::{
+    api::{Message, Messages},
+    completions::{Chunk, Completions},
+};
 use ovsy_share::{CompactQuery, Event, SessionId, SessionInfo};
 
 /// Initializes the user session and returns its messages
@@ -55,11 +59,11 @@ pub async fn handle_compact(sid: Paths<SessionId>, data: Json<CompactQuery>) -> 
 
     Response::ok().stream(move |tx| {
         async move {
-            let preserve_count =
-                preserve.unwrap_or_else(|| Settings::get().assistant.preserve_messages);
+            let cfg = Settings::get();
+            let preserve_count = preserve.unwrap_or(cfg.execution.preserve_messages);
             info!("Compressing session messages (preserve: {preserve_count})");
 
-            let ai_conf = Settings::get().assistant.clone();
+            let compression_cfg = cfg.compression.clone();
 
             // get session from the global state
             let Some(session_shared) = Session::get(&session_id) else {
@@ -92,11 +96,15 @@ pub async fn handle_compact(sid: Paths<SessionId>, data: Json<CompactQuery>) -> 
             let to_preserve: Vec<Message> = messages.slice(-(preserve_count as isize)).into();
 
             // creating a prompt to compress the history
-            let messages = messages.user(vec![ai_conf.compress_prompt.into()]).wrap();
+            let messages = messages.user(vec![compression_cfg.prompt.into()]).wrap();
 
             // sending a request to the LLM
-            let mut response = match Completions::try_from(ai_conf.compression) {
-                Ok(mut comp) => match comp.send(messages).await {
+            let ops = compression_cfg
+                .options
+                .clone()
+                .unwrap_or(cfg.completions.options.clone());
+            let mut response = match Completions::try_from(ops) {
+                Ok(comp) => match comp.send(messages).await {
                     Ok(res) => res,
                     Err(e) => {
                         error!("Failed to send compression request to LLM: {e}");
@@ -116,7 +124,7 @@ pub async fn handle_compact(sid: Paths<SessionId>, data: Json<CompactQuery>) -> 
             // stream the response to the user and collect the full text
             while let Some(chunk) = response.next().await {
                 match chunk {
-                    Ok(AiChunk::Text(text_part)) => {
+                    Ok(Chunk::Text(text_part)) => {
                         if tx.send(Event::answer(text_part.clone())).is_err() {
                             warn!("Stream receiver dropped by client, aborting compression");
                             return;

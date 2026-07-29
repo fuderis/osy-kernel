@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use anylm::{Schema, Tool};
+use anylm::api::{Schema, Tool};
 use system_utils::AudioControl;
 
 pub fn tools_list() -> Vec<Tool> {
