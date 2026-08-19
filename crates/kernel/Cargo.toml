@@ -16,7 +16,7 @@
 [package]
 name = "osy"
 description = "Osy — Ultra-Fast AI Kernel (experimental)"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2024"
 
 [dependencies]

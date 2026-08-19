@@ -53,7 +53,7 @@ struct Cli {
 enum Commands {
     /// Check the status of all ecosystem components
     Status,
-    /// Refreshes the server settings & agents list
+    /// Refresh the server settings & agents list
     Refresh,
 
     /// Serve the kernel server
