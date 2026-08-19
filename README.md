@@ -9,7 +9,7 @@
 </p>
 
 <img src="https://raw.githubusercontent.com/fuderis/osy-kernel/main/assets/cover.png" alt="Cover" width="100%" />
-<br><br>
+<br>
 
 **Osy** is an open-source, high-performance orchestration kernel written in Rust. It is built for deploying ultra-lightweight, secure, and fully predictable personal and enterprise-grade AI assistants.
 
