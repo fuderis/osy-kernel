@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
-pub use crate::{APP_NAME, APP_VERSION, error::Error, settings::Settings};
-pub use ovsy_share::SessionId;
+pub use crate::{error::Error, settings::Settings};
+pub use osy_share::SessionId;
 
 pub use std::result::Result as StdResult;
 pub type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;

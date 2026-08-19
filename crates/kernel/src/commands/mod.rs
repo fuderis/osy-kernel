@@ -2,24 +2,18 @@ pub mod chat;
 pub mod health;
 pub mod server;
 
-use crossterm::style::Stylize;
+use rigging::Stylize;
 
 pub fn section(title: &str) {
     println!();
-    println!("{} {}", "▶".cyan().bold(), title.bold());
+    println!("{}", title.bold());
 }
 
 pub fn info(label: &str, message: &str) {
     if !label.is_empty() {
-        println!(
-            "  {} {}{} {}",
-            "•".cyan(),
-            label.bold(),
-            ":".bold(),
-            message
-        );
+        println!("  • {}{} {}", label.bold(), ":".bold(), message);
     } else {
-        println!("  {} {}", "•".cyan(), message);
+        println!("  • {}", message);
     }
 }
 
@@ -27,15 +21,9 @@ pub fn item(label: &str, message: &str) {
     let message = message.replace('\n', "\n     ");
 
     if !label.is_empty() {
-        println!(
-            "  {} {}{} {}",
-            "└─".cyan(),
-            label.bold(),
-            ":".bold(),
-            message
-        );
+        println!("  └─ {}{} {}", label.bold(), ":".bold(), message);
     } else {
-        println!("  {} {}", "└─".cyan(), message);
+        println!("  └─ {}", message);
     }
 }
 

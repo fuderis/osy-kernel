@@ -1,6 +1,6 @@
 use crate::prelude::DynError;
 use macron::{Display, Error, From};
-use ovsy_share::SessionId;
+use osy_share::SessionId;
 
 // The error
 #[derive(Debug, Display, Error, From)]
@@ -25,4 +25,7 @@ pub enum Error {
 
     #[display(fmt = "No embedding received from provider")]
     NoEmbeddingReceived,
+
+    #[display(fmt = "Invalid skill format in handle_task: {0}")]
+    InvalidSkillNameFormat(String),
 }

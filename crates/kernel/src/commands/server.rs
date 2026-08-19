@@ -10,7 +10,7 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
 
     let cfg = Settings::get();
 
-    // 1. Ovsy Server
+    // 1. Start Server
     let port = cfg.server.port;
     let is_port_free = TcpListener::bind(str!("127.0.0.1:{port}")).is_ok();
 
@@ -20,12 +20,12 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
             .current_dir(path!("$/"))
             .kill_on_drop(false)
             .spawn()?;
-        info("Ovsy Server", &"Online".green().to_string());
+        info("Osy Server", &"Online".green().to_string());
     } else {
-        warn(&format!("Ovsy Server: Port {port} is already in use"));
+        warn(&format!("Osy Server: Port {port} is already in use"));
     }
 
-    // 2. LMS Server
+    // 2. Start LMS Server
     if start_lms {
         let is_running = match Command::new("lms").args(["status"]).output().await {
             Ok(out) => String::from_utf8_lossy(&out.stdout).contains("ON"),
@@ -85,7 +85,7 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
     let cfg = Settings::get();
     let port = cfg.server.port;
 
-    // 1. Stop Ovsy server
+    // 1. Stop server
     #[cfg(unix)]
     {
         let _ = Command::new("sh")
@@ -101,7 +101,7 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
         );
         let _ = Command::new("cmd").args(["/C", &cmd]).output().await;
     }
-    info("Ovsy Server", &"Offline".red().to_string());
+    info("Osy Server", &"Offline".red().to_string());
 
     // 2. Stop LMS server
     if stop_lms {

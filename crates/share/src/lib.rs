@@ -13,26 +13,32 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod agent_metadata;
+pub use agent_metadata::*;
+
 pub mod session_id;
-pub use session_id::SessionId;
+pub use session_id::*;
 
 pub mod session_info;
-pub use session_info::SessionInfo;
+pub use session_info::*;
 
 pub mod skill;
-pub use skill::Skill;
+pub use skill::*;
+
+pub mod fact;
+pub use fact::*;
+
+pub mod rule;
+pub use rule::*;
 
 pub mod event;
-pub use event::{Event, EventKind, EventTaskInfo};
+pub use event::*;
 
-pub mod user_query;
-pub use user_query::{CompactQuery, HandleQuery, UserSessionsQuery};
+pub mod query;
+pub use query::*;
 
-pub mod agent_metadata;
-pub use agent_metadata::AgentMetadata;
-
-pub mod status_data;
-pub use status_data::StatusData;
+pub mod data;
+pub use data::*;
 
 pub fn macos_protect() {
     #[cfg(target_os = "macos")]

@@ -1,7 +1,7 @@
 use super::Manager;
 use crate::prelude::*;
 
-use ovsy_share::AgentMetadata;
+use osy_share::AgentMetadata;
 use pearce::Client;
 use std::{
     process::Stdio,
@@ -37,23 +37,12 @@ impl Agent {
             .to_string_lossy()
             .to_string();
 
-        // remove the "ovsy-" prefix to get the clean agent name
-        let name = file_name
-            .strip_prefix("ovsy-")
-            .unwrap_or(&file_name)
-            .to_string();
-
-        // check agent for already running:
-        if Manager::contains(&arc!(name.clone())).await {
-            return Ok(None);
-        }
-
         // fetch metadata before running the server
         let meta_output = Command::new(&exec_path).arg("metadata").output().await?;
         if !meta_output.status.success() {
             let stderr = String::from_utf8_lossy(&meta_output.stderr);
             return Err(Error::FailedFetchMetadata {
-                name,
+                name: file_name,
                 source: stderr.into(),
             }
             .into());
@@ -61,8 +50,17 @@ impl Agent {
 
         let metadata: AgentMetadata = serde_json::from_slice(&meta_output.stdout)?;
 
+        // check agent for already running:
+        if Manager::contains(&arc!(metadata.name.clone())).await {
+            info!(
+                "[Manager] Agent '{}' already in running, skipping...",
+                metadata.name
+            );
+            return Ok(None);
+        }
+
         // setup Unix Domain Socket path
-        let sock_path = path!("$temp$/uds/{}.sock", name);
+        let sock_path = path!("$temp$/socks/{}.sock", metadata.name);
 
         // build server execution command
         let mut cmd = Command::new(&exec_path);
@@ -101,7 +99,7 @@ impl Agent {
                 _ => {
                     if attempts >= 50 {
                         return Err(Error::AgentStartFailed {
-                            name,
+                            name: metadata.name,
                             sock_path: sock_path.to_string_lossy().to_string(),
                         }
                         .into());

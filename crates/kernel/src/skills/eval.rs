@@ -15,12 +15,6 @@ pub fn tools_list() -> Vec<Tool> {
                  The last line/expression is returned as the result.",
             ),
         )
-        .optional_property(
-            "task_id",
-            Schema::integer(
-                "Optional task ID to inject the execution result directly into its input context.",
-            ),
-        )
     ]
 }
 

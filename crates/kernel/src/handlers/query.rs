@@ -1,13 +1,18 @@
-use crate::{context, manager::*, prelude::*, runtime::Runtime, session::Session, skills};
+use crate::{
+    context, helpers,
+    manager::Manager,
+    prelude::*,
+    runtime::Runtime,
+    session::Session,
+    skills::{self, task::TaskAction},
+};
 
 use anylm::{
-    api::{Content, Message, Messages},
+    api::{Content, Message, Messages, Visibility},
     completions::{Chunk, Completions},
     embeddings::EmbeddingSearch,
 };
-use chrono::FixedOffset;
-use ovsy_share::{Event, EventKind, HandleQuery, SessionInfo};
-use std::collections::HashSet;
+use osy_share::{Event, HandleQuery, SessionInfo};
 use tokio::task::JoinSet;
 
 /// API: The user query handler
@@ -17,14 +22,14 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
     Response::ok().stream(move |tx| async move {
         let result = match read_session(sid).await {
             Ok((session, messages)) => {
-                handle_query(sid, tx.clone(), session, messages, message).await
+                handle_query(sid, tx.clone(), session, messages, message, false).await
             }
             Err(e) => Err(e),
         };
 
         if let Err(e) = result {
             error!("[handle_query{{sid={sid}}}] {e}");
-            tx.send(Event::error(str!(e))).ok();
+            tx.send(Event::Error(str!(e))).ok();
         }
     })
 }
@@ -43,7 +48,8 @@ async fn read_session(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<
     Ok((session, messages))
 }
 
-/// Handles the user query with self-healing on planning/generation level
+/// Handles the user query with direct parallel tool execution and self-healing
+#[async_recursion]
 #[log(skip_all, fields(sid = %sid))]
 async fn handle_query(
     sid: SessionId,
@@ -51,7 +57,9 @@ async fn handle_query(
     session: Arc<Mutex<Session>>,
     messages: Arc<Mutex<Messages>>,
     message: Message,
+    is_control: bool,
 ) -> Result<()> {
+    // warn!("MESSAGES: {messages:#?}"); // DEBUG
     info!("Processing the user query...");
 
     let settings = Settings::get();
@@ -59,68 +67,140 @@ async fn handle_query(
     let exec_options = &settings.execution;
     let context_options = &settings.context;
 
-    // 1. RAG: Search for relevant facts about the user
+    // 1. RAG: Search for relevant facts about the user and load Session Rules
     let session_guard = session.lock().await;
     let mut facts_prompt = String::new();
+    let mut rules_prompt = String::new();
 
-    if let Some(user_text) = context::extract_text_from_msg(&message) {
-        if let Ok(query_vec) = context::generate_embedding(&user_text, EmbeddingSearch::Query).await
-        {
-            if let Ok(facts) = session_guard
-                .search_facts(
-                    query_vec,
-                    context_options.search_limit,
-                    context_options.fact_similarity,
-                )
-                .await
-            {
-                if !facts.is_empty() {
-                    info!(
-                        "Loaded {} facts for sid={}: {:?}",
-                        facts.len(),
-                        sid,
-                        facts.iter().map(|f| &f.data.text).collect::<Vec<_>>()
-                    );
-
-                    facts_prompt.push_str("\n\n### Loaded User Facts (use them when writing the answer, if necessary):\n");
-                    for record in facts {
-                        facts_prompt
-                            .push_str(&format!("  * [ID: {}] {}\n", record.id, record.data.text));
-                    }
-                } else {
-                    info!("No relevant facts found for user query.");
+    // Загружаем активные правила сессии (Глобальные + Локальные)
+    match session_guard.list_session_rules().await {
+        Ok(rules) => {
+            if !rules.is_empty() {
+                info!(
+                    "[Rules] Loaded {} active rules for sid={}",
+                    rules.len(),
+                    sid
+                );
+                rules_prompt.push_str(
+                    "\n\n### MANDATORY USER RULES & PREFERENCES (STRICTLY FOLLOW THEM):\n",
+                );
+                for rule in rules {
+                    let scope = if rule.is_global { "Global" } else { "Local" };
+                    rules_prompt.push_str(&format!(
+                        "  * [ID: {}, Scope: {}] {}\n",
+                        rule.id, scope, rule.text
+                    ));
                 }
+            } else {
+                info!("[Rules] No active rules found for sid={}", sid);
             }
+        }
+        Err(e) => {
+            error!("[Rules] Failed to load session rules: {e}");
         }
     }
 
-    // 2. Preparing the context and system promptes
+    let user_text = context::extract_text_from_msg(&message);
+    info!(
+        "[RAG] Extracting text from user message: found = {}",
+        user_text.is_some()
+    );
+
+    if let Some(user_text) = user_text {
+        if user_text.trim().is_empty() {
+            info!("[RAG] Extracted user text is empty, skipping facts search.");
+        } else {
+            info!(
+                "[RAG] Generating embedding for query (len={})...",
+                user_text.len()
+            );
+
+            match context::generate_embedding(&user_text, EmbeddingSearch::Query).await {
+                Ok(query_vec) => {
+                    info!("[RAG] Embedding generated successfully. Querying LanceDB facts...");
+                    match session_guard
+                        .search_facts(
+                            query_vec,
+                            context_options.search_limit,
+                            context_options.fact_similarity,
+                        )
+                        .await
+                    {
+                        Ok(facts) => {
+                            if facts.is_empty() {
+                                info!(
+                                    "[RAG] No facts met the similarity threshold ({}) or DB is empty.",
+                                    context_options.fact_similarity
+                                );
+                            } else {
+                                info!(
+                                    "[RAG] Loaded {} facts for sid={}: {:?}",
+                                    facts.len(),
+                                    sid,
+                                    facts.iter().map(|f| &f.data.text).collect::<Vec<_>>()
+                                );
+
+                                facts_prompt.push_str("\n\n### Loaded User Facts (use them when writing the answer, if necessary):\n");
+                                for record in facts {
+                                    facts_prompt.push_str(&format!(
+                                        "  * [ID: {}] {}\n",
+                                        record.id, record.data.text
+                                    ));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("[RAG] Failed to search facts in LanceDB: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[RAG] Failed to generate embedding for text: {e}");
+                    tx.send(Event::Error(str!("{e}\n")))?;
+                }
+            }
+        }
+    } else {
+        warn!(
+            "[RAG] Could not extract text content from incoming user Message! Skipping facts search."
+        );
+    }
+
+    // 2. Preparing the context and system prompts
     let raw_messages = messages.lock().await.messages.clone();
     let base_system_prompt = system_prompt(&session_guard.info, &settings);
     drop(session_guard);
 
+    // --- СОХРАНЯЕМ ВХОДЯЩЕЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ В БД ---
+    if !is_control {
+        session.lock().await.write_message(message.clone()).await?;
+    }
+
     let messages = Messages::from(raw_messages)
-        .system(vec![
-            format!("{base_system_prompt}{facts_prompt}").into(),
-            settings
-                .completions
-                .assist_prompt
-                .replace("{AGENTS_LIST}", &Manager::agents_list_doc().await)
-                .into(),
-        ])
+        .message(
+            Message::system(vec![
+                format!("{base_system_prompt}{rules_prompt}{facts_prompt}").into(),
+                settings
+                    .completions
+                    .assist_prompt
+                    .replace("{AGENTS_LIST}", &Manager::agents_list_doc().await)
+                    .into(),
+            ])
+            .visibility(Visibility::Internal),
+        )
         .message(message)
         .wrap();
 
-    let mut tasks_list = vec![];
+    let mut agent_tasks = vec![];
     let mut evals_list = vec![];
     let mut memory_results = vec![];
 
     let mut retry_count = 0;
     let max_retries = exec_options.max_retries.max(1);
 
-    // top-level generation cycle: task planning
+    // LLM Planning cycle
     loop {
-        tasks_list.clear();
+        agent_tasks.clear();
         evals_list.clear();
         memory_results.clear();
         let mut text_response = str!();
@@ -137,9 +217,15 @@ async fn handle_query(
                     warn!(
                         "Failed to send query completions request (attempt {retry_count}/{max_retries}): {e}"
                     );
-                    messages.lock().await.add_user(vec![
-                        format!("An error occurred: {e}. Please try again to plan the task using the tools.").into()
-                    ]);
+                    messages.lock().await.add_message(
+                        Message::user(vec![
+                            format!(
+                                "An error occurred: {e}. Please try again to plan using the tools."
+                            )
+                            .into(),
+                        ])
+                        .visibility(Visibility::Internal),
+                    );
                     continue;
                 } else {
                     return Err(e.into());
@@ -147,24 +233,23 @@ async fn handle_query(
             }
         };
 
-        // read ai chunks and collect tool calls
+        // Read AI chunks and collect tool calls
         let mut chunk_error = None;
         while let Some(chunk) = response.next().await {
             match chunk {
                 Ok(Chunk::Text(text_part)) => {
                     text_response.push_str(&text_part);
-                    // streaming plain text to the user
-                    tx.send(Event::answer(text_part))?;
+                    tx.send(Event::Answer(text_part))?;
                 }
 
                 Ok(Chunk::Tool(tool_call)) => match tool_call.func.name.as_ref() {
-                    "handle_agent" => match tool_call.parse_args::<skills::task::TaskAction>() {
+                    "handle_task" => match tool_call.parse_args::<skills::task::TaskAction>() {
                         Ok(mut task) => {
                             task.tool_call_id = tool_call.id;
-                            tasks_list.push(task);
+                            agent_tasks.push(task);
                         }
                         Err(e) => {
-                            chunk_error = Some(str!("Failed to parse handle_agent: {e}").into());
+                            chunk_error = Some(str!("Failed to parse handle_task: {e}").into());
                             break;
                         }
                     },
@@ -184,7 +269,7 @@ async fn handle_query(
                     {
                         Ok(act) => {
                             let s = session.lock().await;
-                            match context::fact::handle_remember(&s, act.fact).await {
+                            match skills::fact::handle_remember_fact(&s, act).await {
                                 Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
                                 Err(e) => {
                                     chunk_error = Some(str!("Failed to save fact: {e}").into());
@@ -202,7 +287,7 @@ async fn handle_query(
                     {
                         Ok(act) => {
                             let s = session.lock().await;
-                            match context::fact::handle_forget(&s, act.fact_id).await {
+                            match skills::fact::handle_forget_fact(&s, act.fact_id).await {
                                 Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
                                 Err(e) => {
                                     chunk_error = Some(str!("Failed to remove fact: {e}").into());
@@ -215,6 +300,25 @@ async fn handle_query(
                             break;
                         }
                     },
+
+                    "search_fact" => match tool_call.parse_args::<skills::fact::SearchFactAction>()
+                    {
+                        Ok(act) => {
+                            let s = session.lock().await;
+                            match skills::fact::handle_search_fact(&s, act).await {
+                                Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
+                                Err(e) => {
+                                    chunk_error = Some(str!("Failed to search facts: {e}").into());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            chunk_error = Some(str!("Failed to parse search_fact: {e}").into());
+                            break;
+                        }
+                    },
+
                     _ => {}
                 },
 
@@ -229,17 +333,23 @@ async fn handle_query(
             retry_count += 1;
             if retry_count < max_retries {
                 warn!("Stream error on planning level ({retry_count}/{max_retries}): {err}");
-                messages.lock().await.add_user(vec![
-                    format!("An error occurred during stream generation: {err}. Please try again to complete the request.").into()
-                ]);
+                messages.lock().await.add_message(
+                    Message::user(vec![
+                        format!(
+                            "An error occurred during stream generation: {err}. Please try again."
+                        )
+                        .into(),
+                    ])
+                    .visibility(Visibility::Internal),
+                );
                 continue;
             } else {
                 return Err(err);
             }
         }
 
-        // hallucination check (if there is no text, no tasks, no JS calculations, and no memory operations)
-        if tasks_list.is_empty()
+        // Hallucination check
+        if agent_tasks.is_empty()
             && evals_list.is_empty()
             && memory_results.is_empty()
             && text_response.trim().is_empty()
@@ -249,9 +359,12 @@ async fn handle_query(
                 warn!(
                     "Model hallucinated: empty text response and no tool calls. Retrying ({retry_count}/{max_retries})..."
                 );
-                messages.lock().await.add_user(vec![
-                    "You returned an empty response. If you need to solve the task, delegate work to an agent, execute JS, or use memory tools.".into()
-                ]);
+                messages.lock().await.add_message(
+                    Message::user(vec![
+                        "You returned an empty response. Execute tools or answer the user.".into(),
+                    ])
+                    .visibility(Visibility::Internal),
+                );
                 continue;
             } else {
                 return Err(str!("Model failed to plan tasks: returned empty response").into());
@@ -261,216 +374,161 @@ async fn handle_query(
         break;
     }
 
-    // if the model has performed memory operations, notify the user
-    for (tool_call_id, res_text) in memory_results {
-        tx.send(Event::think(format!("{res_text}")).raw_task_info(0, tool_call_id))?;
-    }
-
-    // performing JS calculations (if any)
-    if !evals_list.is_empty() {
-        let mut runtime = Runtime::new();
-
-        for (tool_call_id, eval) in evals_list {
-            let result: String = runtime.eval(&eval.code)?;
-
-            if let Some(task_id) = eval.task_id {
-                let Some(task) = tasks_list.iter_mut().find(|t| t.task_id == task_id) else {
-                    warn!("Task #{task_id} not found");
-                    continue;
-                };
-
-                if let Some(parameter) = &eval.parameter {
-                    let placeholder = format!("{{{{{parameter}}}}}");
-
-                    if task.task_query.contains(&placeholder) {
-                        task.task_query = task.task_query.replace(&placeholder, &result);
-                    } else {
-                        warn!("Placeholder '{parameter}' not found in task #{task_id}");
-                    }
-                } else {
-                    if !task.task_query.ends_with('\n') {
-                        task.task_query.push('\n');
-                    }
-
-                    task.task_query.push_str(&result);
-                }
-            } else {
-                tx.send(Event::answer(format!("\n\n{result}")).raw_task_info(0, tool_call_id))?;
-            }
+    // 3. Process Memory Operations & Notifications
+    let has_memory_ops = !memory_results.is_empty();
+    if has_memory_ops {
+        let mut msg_guard = messages.lock().await;
+        for (tool_call_id, res_text) in memory_results {
+            tx.send(Event::Thinking(res_text.clone()))?;
+            let content_item: Content = format!("Memory Operation Result:\n{res_text}").into();
+            msg_guard.push_content(Some(&tool_call_id), content_item);
         }
     }
 
-    // launching an Agent task pool
-    if !tasks_list.is_empty() {
-        // remove broken dependencies:
-        let active_ids: HashSet<i64> = tasks_list.iter().map(|task| task.task_id).collect();
-        for task in tasks_list.iter_mut() {
-            task.depend_tasks.retain(|id| active_ids.contains(id));
-        }
-
-        // send tool calls to client:
-        if let Some(msg) = (&*messages.lock().await).messages.last()
-            && msg.role.is_assistant()
-        {
-            tx.send(Event::start(&msg.tool_calls))?;
-        }
-
-        // delegate tasks:
-        let tasks_len = tasks_list.len();
-        let tasks = Tasks::new(session, messages);
-
-        // collect tasks:
-        let mut running = vec![];
-        {
-            let mut lock = tasks.lock().await;
-
-            for task in tasks_list {
-                if task.depend_tasks.is_empty() {
-                    running.push(task.task_id);
-                }
-
-                lock.pending
-                    .insert(task.task_id, Task::new(tx.clone(), tasks.clone(), task));
-            }
+    // 4. Performing JS calculations
+    let has_evals = !evals_list.is_empty();
+    if has_evals {
+        let results: Vec<(String, Content)> = {
+            let mut runtime = Runtime::new();
+            evals_list
+                .into_iter()
+                .map(|(tool_call_id, eval)| {
+                    let result: String = match runtime.eval(&eval.code) {
+                        Ok(res) => res,
+                        Err(e) => format!("JS Execution Error: {e}"),
+                    };
+                    let content_item: Content = format!("JS Result:\n{result}").into();
+                    (tool_call_id, content_item)
+                })
+                .collect()
         };
 
-        // spawning tasks:
-        info!("Spawning agent tasks ({tasks_len})");
-        for task_id in running {
-            handle_task(task_id, tx.clone(), tasks.clone()).await;
+        for (tool_call_id, content_item) in results {
+            tx.send(Event::Thinking("Executing JS script code...".to_string()))?;
+            messages
+                .lock()
+                .await
+                .push_content(Some(&tool_call_id), content_item);
         }
-    } else {
-        tx.send(Event::finish())?;
-        info!("The user request was processed without agent tasks");
+    }
 
-        // save messages to database:
-        let to_save = messages.lock().await.slice(-1);
+    // 5. Parallel Tool/Agent Execution & Control Step Dispatch
+    if !agent_tasks.is_empty() {
+        info!("Executing {} agent tasks in parallel", agent_tasks.len());
+
+        let mut workers = JoinSet::new();
+
+        for task in agent_tasks {
+            let session = session.clone();
+            let messages = messages.clone();
+            let tx = tx.clone();
+
+            workers.spawn(
+                async move {
+                    if let Err(e) = handle_agent(session, messages, tx.clone(), task.clone()).await
+                    {
+                        error!("[handle_agent] Execution failed: {e}");
+                        tx.send(Event::Error(str!("{e}"))).ok();
+                    }
+                }
+                .instrument(Span::current()),
+            );
+        }
+
+        while let Some(res) = workers.join_next().await {
+            if let Err(e) = res {
+                error!("Agent task worker panicked: {e}");
+            }
+        }
+
+        info!("All parallel tasks completed. Launching control query...");
+        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()])
+            .visibility(Visibility::Internal);
+
+        handle_query(sid, tx, session, messages, control_msg, true).await?;
+    } else if has_evals || has_memory_ops {
+        info!("JS evaluations or Memory operations finished. Launching control query...");
+        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()])
+            .visibility(Visibility::Internal);
+
+        handle_query(sid, tx, session, messages, control_msg, true).await?;
+    } else {
+        tx.send(Event::Finish)?;
+        info!("Query processed directly (or control step finished)");
+
+        let to_save = messages
+            .lock()
+            .await
+            .slice(-1)
+            .into_iter()
+            .filter(|msg| msg.role.is_assistant())
+            .collect::<Vec<_>>();
         session.lock().await.write_messages(to_save).await?;
     }
 
     Ok(())
 }
 
-/// Handles the agent task or pendings it
-#[async_recursion]
-#[log(skip_all, fields(tid))]
-pub async fn handle_task(tid: i64, tx: Sender<Bytes>, tasks: Arc<Mutex<Tasks>>) {
-    let mut lock = tasks.lock().await;
-    let Some(task) = lock.pending.remove(&tid) else {
-        return;
-    };
-
-    let tx = tx.clone();
-    let tasks = tasks.clone();
-
-    // handle agent task:
-    let messages = lock.messages.clone();
-    let current = Span::current();
-    let child = tokio::spawn(
-        async move {
-            let session = tasks.lock().await.session.clone();
-
-            if let Err(e) = handle_agent(
-                task.agent.clone(),
-                session,
-                messages,
-                tx.clone(),
-                task.clone(),
-            )
-            .await
-            {
-                error!("{e}");
-                // send error to client
-                task.tx
-                    .send(Event::error(str!("{e}")).task_info(task.info()))
-                    .ok();
-
-                // guarantee that client will receive the task closure
-                task.tx.send(Event::finish().task_info(task.info())).ok();
-
-                task.finish_branch().await;
-            }
-        }
-        .instrument(current),
-    );
-
-    lock.working.insert(tid, arc!(child));
-}
-
-/// Handles the agent task
-#[log(skip_all, fields(agent = %agent_name, skills = %task.skills.join(",")))]
+/// Handles an individual agent task
+#[log(skip_all, fields(agent = %task.agent, skill = %task.skill))]
 pub async fn handle_agent(
-    agent_name: String,
     session: Arc<Mutex<Session>>,
     messages: Arc<Mutex<Messages>>,
     tx: Sender<Bytes>,
-    task: Task,
+    task: TaskAction,
 ) -> Result<()> {
-    let arc_name = arc!(task.agent.clone());
+    let agent_name = &task.agent;
+    let skill_name = &task.skill;
+    let arc_name = arc!(task.agent.to_string());
 
     // 1. Checking the agent for existence
-    let (sock_path, prompt, _skills) = match Manager::ensure_agent(&arc_name).await {
-        Ok(Some(ops)) => ops,
+    let sock_path = match Manager::ensure_agent(&arc_name).await {
+        Ok(Some(path)) => path,
         _ => {
-            return Err(str!("Agent `{}` is not available or failed to start", task.agent).into());
+            return Err(str!("Agent `{}` is not available or failed to start", agent_name).into());
+        }
+    };
+    let skill_prompt = match Manager::agent_prompt(&arc_name, &skill_name).await {
+        Some(prompt) => prompt,
+        _ => {
+            return Err(str!("Using unknown skill `{}`, aborting...", skill_name).into());
         }
     };
 
     // 2. Getting tools via IPC
+    // warn!("SOCK PATH: {}", sock_path.display()); // DEBUG
     let client = Client::ipc(&sock_path.to_string_lossy());
     let response = client
-        .post("/tools/list")
+        .post(&str!("/skills/{}/tools", task.skill))
         .header("Content-Type", "application/json")
-        .json(&json!({ "skills": task.skills }))
         .send()
-        .await?;
+        .await
+        .map_err(|e| str!("Failed to get the `{}` agent tools list: {e}", task.agent))?;
     let tools = response.json::<Vec<anylm::api::Tool>>().await?;
 
-    // warn!("Received Tools List: {tools:#?}"); // DEBUG
-
-    // logging and sending the start event
     let log_query = task
         .query
         .chars()
         .take(40)
         .collect::<String>()
         .trim_end_matches('.')
-        .replace('\n', "\\n");
+        .replace('\n', " ");
 
-    info!("Handling `{}` agent: \"{log_query}...\"", task.agent);
-    tx.send(
-        Event::think(str!(
-            "**Handling `{}` agent:** *\"{log_query}...\"*",
-            task.agent
-        ))
-        .task_info(task.info()),
-    )
-    .ok();
+    let msg = str!("Handling `{}` agent: \"{log_query}...\"", agent_name);
+    info!("{msg}");
+    tx.send(Event::Thinking(msg)).ok();
 
     let settings = Settings::get();
     let options = settings.completions.options.clone();
     let exec_options = &settings.execution;
 
-    // 3. Creating a local context for generating
+    // 3. Creating local context
     let system_pr = system_prompt(&session.lock().await.info, &settings);
-
-    // collect the context in a text block for the system prompt
-    let context_items = task
-        .context()
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    let context_str = if !context_items.is_empty() {
-        str!("Prior Context / Task Results:\n{:?}", context_items)
-    } else {
-        String::new()
-    };
 
     let agent_messages = Messages::new()
         .system(vec![
-            format!("{}{}", system_pr, context_str).into(),
-            prompt.trim().into(),
+            system_pr.into(),
+            skill_prompt.trim().into(),
         ])
         .user(vec![
             str!("{prompt}\n\n{query}",
@@ -480,13 +538,11 @@ pub async fn handle_agent(
         ])
         .wrap();
 
-    // warn!("{agent_messages:#?}"); // DEBUG
-
     let mut tool_calls = vec![];
     let mut retry_count = 0;
     let max_retries = exec_options.max_retries.max(1);
 
-    // the self-healing cycle
+    // Agent self-healing execution loop
     loop {
         tool_calls = vec![];
         let mut text_response = str!();
@@ -503,7 +559,7 @@ pub async fn handle_agent(
                     match chunk {
                         Ok(Chunk::Text(text_part)) => {
                             text_response.push_str(&text_part);
-                            tx.send(Event::answer(text_part).task_info(task.info()))?;
+                            tx.send(Event::Answer(text_part))?;
                         }
 
                         Ok(Chunk::Tool(tool_call)) => {
@@ -517,53 +573,46 @@ pub async fn handle_agent(
                     }
                 }
 
-                // self-healing in case of a stream error
                 if let Some(err) = chunk_error {
                     retry_count += 1;
                     if retry_count < max_retries {
                         warn!(
-                            "Error reading stream from agent `{}`. Retrying ({retry_count}/{max_retries}): {err}",
-                            task.agent
+                            "Error reading stream from agent `{agent_name}`. Retrying ({retry_count}/{max_retries}): {err}"
                         );
-                        tx.send(
-                            Event::think(str!(
-                                "Stream error. Healing and retrying `{}` agent execution...",
-                                task.agent
-                            ))
-                            .task_info(task.info()),
-                        )
+                        tx.send(Event::Thinking(format!(
+                            "Stream error. Retrying {} agent execution...",
+                            agent_name
+                        )))
                         .ok();
                         agent_messages.lock().await.add_user(vec![
-                            format!("An error occurred during output generation: {err}. Please try again and complete the task using the available tools.").into()
+                            format!("An error occurred during output generation: {err}. Please try again using tools.").into()
                         ]);
                         continue;
                     } else {
-                        return Err(str!(
-                            "Agent `{}` failed after stream error: {err}",
-                            task.agent
-                        )
-                        .into());
+                        return Err(
+                            str!("Agent `{agent_name}` failed after stream error: {err}").into(),
+                        );
                     }
                 }
 
-                // self-healing with an empty response without calling tools
                 if tool_calls.is_empty() && text_response.trim().is_empty() {
                     retry_count += 1;
                     if retry_count < max_retries {
                         warn!(
-                            "Agent `{}` returned empty response and no tool calls. Retrying ({retry_count}/{max_retries})...",
-                            task.agent
+                            "Agent `{agent_name}` returned empty response and no tool calls. Retrying ({retry_count}/{max_retries})..."
                         );
-                        tx.send(Event::think(str!("Agent `{}` returned empty response. Self-healing task execution...", task.agent)).task_info(task.info())).ok();
+                        tx.send(Event::Thinking(format!(
+                            "Agent {} returned empty response. Retrying task...",
+                            agent_name
+                        )))
+                        .ok();
                         agent_messages.lock().await.add_user(vec![
-                            "You did not call any tools. Please execute the requested task using the available tools now.".into()
+                            "You did not call any tools. Please execute the requested task using tools now.".into()
                         ]);
                         continue;
                     } else {
                         return Err(str!(
-                            "Agent `{}` failed to execute task after {} retries: empty output",
-                            task.agent,
-                            max_retries
+                            "Agent `{agent_name}` failed after {max_retries} retries: empty output"
                         )
                         .into());
                     }
@@ -574,185 +623,136 @@ pub async fn handle_agent(
                 retry_count += 1;
                 if retry_count < max_retries {
                     warn!(
-                        "Failed to send request to Completions for agent `{}`. Retrying ({retry_count}/{max_retries}): {e}",
-                        task.agent
+                        "Failed to send completions request for agent `{agent_name}` ({retry_count}/{max_retries}): {e}"
                     );
-                    tx.send(
-                        Event::think(str!(
-                            "Request error. Healing and retrying `{}` agent execution...",
-                            task.agent
-                        ))
-                        .task_info(task.info()),
-                    )
+                    tx.send(Event::Thinking(format!(
+                        "Request error. Retrying {} agent execution...",
+                        agent_name
+                    )))
                     .ok();
                     agent_messages.lock().await.add_user(vec![
-                        format!("Failed to process request due to error: {e}. Please attempt to execute the task again using tools.").into()
+                        format!("Failed to process request due to error: {e}. Please attempt to execute the task again.").into()
                     ]);
                     continue;
                 } else {
                     return Err(str!(
-                        "Agent `{}` failed sending completions request: {e}",
-                        task.agent
+                        "Agent `{agent_name}` failed sending completions request: {e}"
                     )
                     .into());
                 }
             }
         }
 
-        // if there are no tools to call - exit the generation cycle
         if tool_calls.is_empty() {
             break;
         }
 
-        // parallel execution of tool calls
-        let mut workers = JoinSet::new();
+        // Parallel execution of sub-tool calls via IPC
+        let mut sub_workers = JoinSet::new();
 
         for tool_call in tool_calls {
             let client = client.clone();
             let sock_path = sock_path.clone();
             let arc_name = arc_name.clone();
             let tx = tx.clone();
-            let task = task.clone();
+            let agent_name = agent_name.to_string();
+            let skill_name = skill_name.to_string();
 
-            workers.spawn(async move {
-                let func = tool_call.func;
-                let log_json = func.json_str.replace('\n', "\\n");
+            sub_workers.spawn(
+                async move {
+                    let func = tool_call.func;
+                    let log_json = func.json_str.replace('\n', " ");
 
-                info!("Calling `{} -> {}` tool: {log_json}", task.agent, func.name);
-                tx.send(
-                    Event::think(str!(
-                        "Calling `{} -> {}` tool: {log_json}",
-                        task.agent,
+                    let msg = format!(
+                        "Calling `{agent_name} -> {skill_name}.{}` tool: {log_json}",
                         func.name
-                    ))
-                    .task_info(task.info()),
-                )
-                .ok();
-
-                let request_path = format!("/tools/call/{}", func.name);
-                let request_body = func.parse_args::<JsonValue>()?;
-
-                // sending a request to the agent's server
-                let mut response = client
-                    .post(&request_path)
-                    .header("Content-Type", "application/json")
-                    .json(&request_body)
-                    .stream::<Event>()
-                    .await;
-
-                // tactical restart
-                if response.is_err() {
-                    warn!(
-                        "Agent `{}` didn't respond. Attempting tactical restart...",
-                        task.agent
                     );
-                    tx.send(
-                        Event::think(str!(
-                            "Connection lost. Restarting `{}` agent...",
-                            task.agent
-                        ))
-                        .task_info(task.info()),
-                    )
-                    .ok();
+                    info!("{msg}");
+                    tx.send(Event::Thinking(msg)).ok();
 
-                    let _ = Manager::stop(arc_name.clone()).await;
+                    let request_path = format!("/skills/{}/call/{}", skill_name, func.name);
+                    let request_body = func.parse_args::<JsonValue>()?;
+                    // warn!("RESPONSE: {:?}: {:#?}", &request_path, &request_body); // DEBUG
 
-                    if let Ok(Some((_, _, _))) = Manager::ensure_agent(&arc_name).await {
-                        response = Client::ipc(&sock_path.to_string_lossy())
-                            .post(&request_path)
-                            .header("Content-Type", "application/json")
-                            .json(&request_body)
-                            .stream::<Event>()
-                            .await;
-                    }
-                }
+                    let mut response = client
+                        .post(&request_path)
+                        .header("Content-Type", "application/json")
+                        .json(&request_body)
+                        .stream::<Event>()
+                        .await;
 
-                let mut stream = match response {
-                    Ok(res) => res,
-                    Err(e) => {
-                        return Err(str!(
-                            "Agent `{}` crashed and failed to recover: {e}",
-                            task.agent
-                        )
-                        .into());
-                    }
-                };
+                    if response.is_err() {
+                        warn!(
+                            "Agent `{agent_name}` didn't respond. Attempting tactical restart..."
+                        );
+                        tx.send(Event::Thinking(format!(
+                            "Connection lost. Restarting agent {}...",
+                            agent_name
+                        )))
+                        .ok();
 
-                let mut full_text = str!();
+                        let _ = Manager::stop(arc_name.clone()).await;
 
-                while let Some(event) = stream.recv().await? {
-                    match event.kind {
-                        EventKind::Answer => {
-                            full_text.push_str(&event.text);
-                            tx.send(Event::answer(event.text).task_info(task.info()))?;
-                        }
-                        EventKind::Finish => {}
-                        _ => {
-                            tx.send(event.task_info(task.info()))?;
+                        if let Ok(Some(_)) = Manager::ensure_agent(&arc_name).await {
+                            response = Client::ipc(&sock_path.to_string_lossy())
+                                .post(&request_path)
+                                .header("Content-Type", "application/json")
+                                .json(&request_body)
+                                .stream::<Event>()
+                                .await;
                         }
                     }
-                }
 
-                Ok::<String, DynError>(full_text)
-            });
+                    let mut stream = match response {
+                        Ok(res) => res,
+                        Err(e) => {
+                            return Err(str!(
+                                "Agent `{agent_name}` crashed and failed to recover: {e}"
+                            )
+                            .into());
+                        }
+                    };
+
+                    let mut full_text = str!();
+
+                    while let Some(event) = stream.recv().await? {
+                        match event {
+                            Event::Answer(text) => {
+                                full_text.push_str(&text);
+                            }
+                            Event::Thinking(text) => {
+                                tx.send(Event::Thinking(text))?;
+                            }
+                            Event::Error(err) => {
+                                tx.send(Event::Error(err))?;
+                            }
+                            Event::Finish => {}
+                        }
+                    }
+
+                    Ok::<String, DynError>(full_text)
+                }
+                .instrument(Span::current()),
+            );
         }
 
-        // collecting the results as they are completed and instantly recording them in the history
-        while let Some(worker_result) = workers.join_next().await {
+        while let Some(worker_result) = sub_workers.join_next().await {
             let full_text: String =
-                worker_result.map_err(|e| str!("Worker task panicked: {e}"))??;
+                worker_result.map_err(|e| str!("Worker tool call panicked: {e}"))??;
             let content_item: Content = full_text.into();
 
-            // write pointwise to the local context to continue generation in the loop
             agent_messages
                 .lock()
                 .await
                 .push_content(None, content_item.clone());
 
-            // save the intermediate stage to the global message history of the main chat
             messages
                 .lock()
                 .await
                 .push_content(Some(&task.tool_call_id), content_item);
         }
 
-        // cycle has completed without errors, stopping it
         break;
-    }
-
-    // take the accumulated results
-    let agent_contents = {
-        let mut local_lock = agent_messages.lock().await;
-        std::mem::take(&mut local_lock.messages)
-            .into_iter()
-            .filter(|msg| !msg.role.is_assistant() && !msg.role.is_user())
-            .flat_map(|msg| msg.content)
-            .collect::<Vec<Content>>()
-    };
-
-    // completing the task in the client and pool
-    tx.send(Event::finish().task_info(task.info())).ok();
-    task.finish(agent_contents).await;
-
-    // send control query (self-correction loop)
-    if task.is_last().await {
-        info!("All parallel tasks completed. Launching control query...");
-
-        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()]);
-        let sid = session.lock().await.id;
-
-        if let Err(e) = handle_query(
-            sid,
-            tx.clone(),
-            session.clone(),
-            messages.clone(),
-            control_msg,
-        )
-        .await
-        {
-            error!("[verification_loop{{sid={sid}}}] Failed to restart query loop: {e}");
-            tx.send(Event::error(str!(e))).ok();
-        }
     }
 
     Ok(())
@@ -761,7 +761,7 @@ pub async fn handle_agent(
 /// Generates the system prompt
 fn system_prompt(info: &SessionInfo, settings: &Settings) -> String {
     let now_utc = Utc::now();
-    let now_local = now_local(info.timezone);
+    let now_local = helpers::now_local(info.timezone);
 
     settings
         .completions
@@ -785,14 +785,4 @@ fn system_prompt(info: &SessionInfo, settings: &Settings) -> String {
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_default(),
         )
-}
-
-/// Returns the session local date time
-fn now_local(timezone_m: i16) -> DateTime<FixedOffset> {
-    let offset_seconds = (timezone_m as i32) * 60;
-    let tz =
-        FixedOffset::east_opt(offset_seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
-
-    let utc_now = Utc::now();
-    utc_now.with_timezone(&tz)
 }

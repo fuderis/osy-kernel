@@ -2,6 +2,7 @@ use crate::Result;
 use anylm::{api::ApiKind, options::Options};
 use atoman::{Config, State, StateGuard};
 use macron::str;
+use rigging::Color;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -10,68 +11,138 @@ use std::{
 
 /// The default system prompt
 const SYSTEM_PROMPT: &'static str = r#"
-# ACTUAL SYSTEM INFO:
+# SYSTEM CONTEXT:
 
-0. Current working directory:
+0. Working directory:
 {CURRENT_PATH}
 
-1. Datetime (now):
+1. Datetime:
 * Global (UTC): {DATETIME_GLOBAL}
 * Local: {DATETIME_LOCAL}
 
-Use the local datetime in all user-facing responses unless another timezone is explicitly requested.
-Use the global UTC datetime for all tool calls unless a tool explicitly requires a different timezone.
+Use Local time for user responses unless specified otherwise.
+Use Global UTC for tool arguments unless a tool explicitly requires another timezone.
 "#;
 
 /// The default assistant prompt
 const ASSISTANT_PROMPT: &'static str = r#"
-# ROLE: You are Ovsy, a high-tech assistant.
-  * Tone: Polite, composed, with a subtle touch of irony.
-  * Persona: A blend of professional tech slang and a refined digital butler.
+# ROLE: You are Osy, a high-tech digital assistant.
+* Tone: Polite, composed, with a subtle touch of irony.
+* Style: Direct, efficient, combining technical precision with a refined butler persona.
 
 # RULES:
-  * Friendly & Concise: Avoid long introductions or repetitive sign-offs.
-  * Proactivity: If you spot an error or a flaw in logic—do not withhold it. Be direct.
-  * Variability: Avoid being overly formulaic; maintain a natural, dynamic conversation.
-  * Markdown Formatting: Use tables, lists, and LaTeX expressions to provide clear, visual explanations.
+* Conciseness: Avoid fluff, empty polite intros, or repetitive sign-offs.
+* Directness: Point out logical flaws, errors, or risks directly.
+* Dynamic Flow: Keep conversations natural; adapt dynamically without rigid templates.
+* Formatting: Use Markdown (tables, lists, clean structure) and LaTeX for mathematical/technical expressions.
 
-# AVAILABLE AI AGENTS:
-Below is the list of specialized agents available to perform various tasks (do not invent unnamed agents on this list).
+# AVAILABLE SKILLS:
+Use available tools and skills (formatted as `agent_name.skill_name`) to perform specialized tasks. Do not invent non-existent skills.
 
 {AGENTS_LIST}
 
-> Do not simulate the output of an AI agent.
+> Never simulate tool outputs or fake task executions manually in text.
 "#;
 
+/// The default contorl prompt
 const CONTROL_PROMPT: &'static str = r#"
-1. Check out the latest request and the assistants responses.
-2. Review the results of the completed agent tasks and decide on the final action.
+1. Review the latest user request and dialogue history.
+2. Evaluate executed tool/skill calls and determine the next step.
 
 EVALUATION RULES:
-1. IF TASKS COMPLETE:
-   - Generate a concise, natural response informing the user of the result.
-   - Remember: The user DOES NOT see raw tool logs. You MUST explain what was done.
+1. IF TASKS ARE COMPLETED:
+   - Provide a concise, clear response informing the user of the final output.
+   - Explain what was accomplished naturally (the user does NOT see raw logs).
 
-2. IF TASKS FAILED, INCOMPLETE, OR NEED PARAMETER CORRECTION:
-   - Do NOT just report a failure if it can be fixed!
-   - Immediately call the appropriate agent tools AGAIN with corrected parameters or alternative strategies to complete the user's request.
-   - Only report a failure to the user if it is a critical, unrecoverable error.
+2. IF TASKS FAILED OR ARE INCOMPLETE:
+   - Do NOT just report an error if it can be fixed!
+   - Re-evaluate parameters/strategies and immediately call the required tool again.
+   - Report a failure only if the error is unrecoverable.
 
 CRITICAL REQUIREMENT:
-You MUST either call a tool to fix/complete the execution OR output a final text message to the user.
-You can NOT return an empty request.
+You MUST either call a tool/skill to continue execution OR yield a final text response to the user.
+An empty turn is strictly prohibited.
 "#;
 
-/// The default context compression prompt
+/// The default normalization prompt
+const NORMALIZE_PROMPT: &'static str = r#"
+You are a context indexing expert. Your task is to process a user-related fact and convert it into an optimized format for vector search and structured memory retrieval.
+
+Instructions:
+1. Translate the original fact strictly into ENGLISH, regardless of its source language.
+2. Generate an expanded, high-density `search text` optimized for semantic embeddings:
+   - Explicitly define the subject (e.g., replace vague pronouns with "The user").
+   - Add relevant English domain terms, categories, synonyms, and natural query phrasings.
+   - Retain all original facts, preferences, dates, proper names, and tech stack details without loss of detail.
+3. Extract 3 to 7 relevant keywords/tags for lexical matching (e.g., categories, specific entity names, tech stacks).
+"#;
+
+/// The default compression prompt
 const COMPRESSION_PROMPT: &'static str = r#"
-Your task is to provide a concise and accurate summary of our dialogue history.
-Preserve key ideas, decisions made, and relevant context. Provide responses in a compressed form.
-Return only the summary text (do not include meta-comments or explanations about the compression itself).
-Break it down into numbered sections.
+Summarize the dialogue history into a clear, structured summary.
+
+Requirements:
+- Preserve essential decisions, facts, user constraints, and active task states.
+- Output ONLY the summary formatted as a numbered list.
+- Omit meta-commentary, introductory text, or explanations about compression.
 "#;
 
 /// The settings instance
 static SETTINGS: State<Config<Settings>> = State::default();
+
+/// Theme color palette settings (for rigging widgets).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ThemeOptions {
+    pub brand_color: (u8, u8, u8),
+    pub alt_color: (u8, u8, u8),
+    pub bg_color: (u8, u8, u8),
+    pub blink_color: (u8, u8, u8),
+}
+
+impl Default for ThemeOptions {
+    fn default() -> Self {
+        Self {
+            brand_color: (255, 85, 65),
+            alt_color: (140, 120, 81),
+            bg_color: (13, 17, 29),
+            blink_color: (20, 26, 42),
+        }
+    }
+}
+
+impl ThemeOptions {
+    pub fn brand_color(&self) -> Color {
+        Color::Rgb {
+            r: self.brand_color.0,
+            g: self.brand_color.1,
+            b: self.brand_color.2,
+        }
+    }
+
+    pub fn bg_color(&self) -> Color {
+        Color::Rgb {
+            r: self.bg_color.0,
+            g: self.bg_color.1,
+            b: self.bg_color.2,
+        }
+    }
+
+    pub fn alt_color(&self) -> Color {
+        Color::Rgb {
+            r: self.alt_color.0,
+            g: self.alt_color.1,
+            b: self.alt_color.2,
+        }
+    }
+
+    pub fn blink_color(&self) -> Color {
+        Color::Rgb {
+            r: self.blink_color.0,
+            g: self.blink_color.1,
+            b: self.blink_color.2,
+        }
+    }
+}
 
 /// The server options
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -133,6 +204,11 @@ pub struct CompletionsOptions {
     pub assist_prompt: String,
     /// The control prompt for evaluating agent task execution
     pub control_prompt: String,
+    /// The embeddings normalization prompt
+    pub normalize_prompt: String,
+    /// The prompt used for summarizing and compressing context
+    pub compression_prompt: String,
+
     /// Model and provider parameters for completions
     pub options: Options,
 }
@@ -149,7 +225,9 @@ impl ::std::default::Default for CompletionsOptions {
         Self {
             system_prompt: str!(SYSTEM_PROMPT.trim()),
             assist_prompt: str!(ASSISTANT_PROMPT.trim()),
+            normalize_prompt: str!(NORMALIZE_PROMPT),
             control_prompt: str!(CONTROL_PROMPT.trim()),
+            compression_prompt: str!(COMPRESSION_PROMPT.trim()),
             options,
         }
     }
@@ -158,18 +236,13 @@ impl ::std::default::Default for CompletionsOptions {
 /// The context compression pipeline options
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompressionOptions {
-    /// The prompt used for summarizing and compressing context
-    pub prompt: String,
     /// Model and provider parameters for compression
     pub options: Option<Options>,
 }
 
 impl ::std::default::Default for CompressionOptions {
     fn default() -> Self {
-        Self {
-            prompt: str!(COMPRESSION_PROMPT.trim()),
-            options: None,
-        }
+        Self { options: None }
     }
 }
 
@@ -233,6 +306,7 @@ impl ::std::default::Default for CacheOptions {
 /// The settings
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
+    pub theme: ThemeOptions,
     /// Server infrastructure settings
     pub server: ServerOptions,
     /// Execution control options for assistant runs

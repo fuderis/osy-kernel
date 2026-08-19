@@ -71,12 +71,12 @@ fn js_to_string(value: &JsValue, ctx: &mut Context) -> StdResult<String, boa_eng
 
     if value.is_object() {
         ctx.register_global_property(
-            boa_engine::js_string!("__ovsy_value__"),
+            boa_engine::js_string!("__osy_value__"),
             value.clone(),
             boa_engine::property::Attribute::all(),
         )?;
 
-        let json = ctx.eval(Source::from_bytes("JSON.stringify(__ovsy_value__)"))?;
+        let json = ctx.eval(Source::from_bytes("JSON.stringify(__osy_value__)"))?;
 
         return Ok(json.to_string(ctx)?.to_std_string_escaped());
     }

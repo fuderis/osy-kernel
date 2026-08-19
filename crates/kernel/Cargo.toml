@@ -14,16 +14,19 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 [package]
-name = "ovsy"
+name = "osy"
+description = "Osy — Ultra-Fast AI Kernel (experimental)"
+version = "0.16.0"
 edition = "2024"
 
 [dependencies]
-ovsy-share.workspace = true
+osy-share.workspace = true
 atoman.workspace = true
 macron.workspace = true
 pearce.workspace = true
 anylm.workspace = true
 cistern.workspace = true
+rigging.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -31,10 +34,7 @@ chrono.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 clap.workspace = true
-libc = "0.2.186"
-boa_engine = "0.21.1"
-ratatui = "0.30.0"
-crossterm = "0.29.0"
-textwrap = "0.16.2"
-hyperrat = "0.1.1"
-unicode-width = "0.2.2"
+boa_engine.workspace = true
+libc.workspace = true
+rand.workspace = true
+whatlang = "0.18.0"

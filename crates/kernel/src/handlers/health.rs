@@ -1,5 +1,5 @@
 use crate::{Manager, prelude::*};
-use ovsy_share::StatusData;
+use osy_share::StatusData;
 
 /// API: Handles the server ping
 pub async fn handle_ping() -> Response {
@@ -8,22 +8,22 @@ pub async fn handle_ping() -> Response {
 
 /// Returns the server status & agents list
 pub async fn handle_status() -> Response {
-    let agents = Manager::agents_list().await;
-    Response::ok().json(&StatusData::Success { agents })
+    let agents_list = Manager::agents_list().await;
+    Response::ok().json(&StatusData { agents_list })
 }
 
 /// Refreshes the server settings & agents list
 pub async fn handle_refresh() -> Response {
     // update settings:
     if let Err(e) = Settings::update().await {
-        return Response::ok().json(&StatusData::Error { error: str!("{e}") });
+        return Response::error().text(str!("{e}"));
     }
 
     // update agents:
     if let Err(e) = Manager::update().await {
-        return Response::ok().json(&StatusData::Error { error: str!("{e}") });
+        return Response::error().text(str!("{e}"));
     }
 
-    let agents = Manager::agents_list().await;
-    Response::ok().json(&StatusData::Success { agents })
+    let agents_list = Manager::agents_list().await;
+    Response::ok().json(&StatusData { agents_list })
 }

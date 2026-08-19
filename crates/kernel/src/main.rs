@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod error;
+pub mod helpers;
 pub mod prelude;
 pub mod settings;
 
@@ -26,27 +27,28 @@ pub mod commands;
 pub mod handlers;
 pub mod skills;
 
-pub mod chat;
-
 use clap::{Parser, Subcommand};
 use manager::Manager;
 use pearce::Server;
 use prelude::*;
 
-pub const APP_NAME: &str = "ovsy";
-pub const APP_VERSION: &str = "0.15.0";
+pub const APP_NAME: &str = "osy";
 
-/// The Ovsy CLI commands parser
+/// The CLI commands parser
 #[derive(Parser)]
-#[command(name = APP_NAME)]
-#[command(version = APP_VERSION)]
-#[command(about = "Ovsy — Ultra-Fast AI Kernel (experimental)", long_about = None)]
+#[command(name = env!("CARGO_PKG_NAME"))]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(about = env!("CARGO_PKG_DESCRIPTION"), long_about = None)]
 struct Cli {
+    /// Load session history on startup when entering interactive chat mode
+    #[arg(short, long)]
+    load: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
-/// The Ovsy CLI commands
+/// The CLI commands
 #[derive(Subcommand)]
 enum Commands {
     /// Check the status of all ecosystem components
@@ -63,7 +65,7 @@ enum Commands {
         #[arg(short, long)]
         lms: bool,
     },
-    /// Stop the Ovsy server by killing the port process
+    /// Stop the server by killing the port process
     Stop {
         /// Also stop the LM Studio server and unload models
         #[arg(short, long)]
@@ -106,7 +108,7 @@ async fn main() -> Result<()> {
         Commands::Config => cmds::health::handle_config().await,
 
         //     CHAT
-        Commands::Chat => cmds::chat::handle_chat().await,
+        Commands::Chat => cmds::chat::handle_chat(cli.load).await,
     } {
         cmds::error(e);
         std::process::exit(1);
@@ -124,18 +126,56 @@ async fn serve() -> Result<()> {
 
     // start server:
     Server::new()
-        //    HEALTH
+        //      HEALTH
         .get("/ping", hands::health::handle_ping)
         .get("/status", hands::health::handle_status)
         .get("/refresh", hands::health::handle_refresh)
-        //    USERS
-        .post("/users/{uid}/sessions", hands::user::handle_list)
-        //    SESSIONS
-        .post("/sessions/{sid}/init", hands::session::handle_init)
-        .post("/sessions/{sid}/finish", hands::session::handle_finish)
-        .post("/sessions/{sid}/compact", hands::session::handle_compact)
-        .post("/sessions/{sid}/clear", hands::session::handle_clear)
-        //    QUERY
+        //      USERS
+        .post("/users/{uid}/sessions", hands::users::handle_list)
+        //      USER FACTS (RAG)
+        .post("/users/{uid}/facts/list", hands::users::handle_facts_list)
+        .post("/users/{uid}/facts/set", hands::users::handle_facts_set)
+        .post(
+            "/users/{uid}/facts/remove",
+            hands::users::handle_facts_remove,
+        )
+        .post("/users/{uid}/facts/clear", hands::users::handle_facts_clear)
+        .post(
+            "/users/{uid}/facts/search",
+            hands::users::handle_facts_search,
+        )
+        //      GLOBAL USER RULES
+        .post("/users/{uid}/rules/list", hands::users::handle_rules_list)
+        .post("/users/{uid}/rules/set", hands::users::handle_rules_set)
+        .post(
+            "/users/{uid}/rules/remove",
+            hands::users::handle_rules_remove,
+        )
+        .post("/users/{uid}/rules/clear", hands::users::handle_rules_clear)
+        //      SESSIONS
+        .post("/sessions/{sid}/init", hands::sessions::handle_init)
+        .post("/sessions/{sid}/finish", hands::sessions::handle_finish)
+        .post("/sessions/{sid}/compact", hands::sessions::handle_compact)
+        .post("/sessions/{sid}/clear", hands::sessions::handle_clear)
+        .post("/sessions/{sid}/clone", hands::sessions::handle_clone)
+        //      LOCAL SESSION RULES
+        .post(
+            "/sessions/{sid}/rules/list",
+            hands::sessions::handle_rules_list,
+        )
+        .post(
+            "/sessions/{sid}/rules/set",
+            hands::sessions::handle_rules_set,
+        )
+        .post(
+            "/sessions/{sid}/rules/remove",
+            hands::sessions::handle_rules_remove,
+        )
+        .post(
+            "/sessions/{sid}/rules/clear",
+            hands::sessions::handle_rules_clear,
+        )
+        //      QUERY
         .post("/sessions/{sid}/query", hands::query::handle_user_query)
         .run(Settings::get().server.port)
         .await?;

@@ -1,7 +1,7 @@
 use super::*;
 use crate::prelude::*;
 
-use ovsy_share::{AgentMetadata, StatusData};
+use osy_share::{AgentMetadata, StatusData};
 use tokio::process::Command;
 
 /// API: Handles the server refreshing (hot-reload)
@@ -18,21 +18,25 @@ pub async fn handle_refresh() -> Result<()> {
 
     match res {
         Ok(response) => {
-            info("Status", &str!("Online (port {port})").green().to_string());
+            let status = response.status();
+            if status.is_success() {
+                info("Status", &str!("Online (port {port})").green().to_string());
 
-            let data: StatusData = response
-                .json()
-                .await
-                .map_err(|e| str!("Failed to parse response: {e}"))?;
+                // successful response: we are parsing StatusData.
+                let _data: StatusData = response
+                    .json()
+                    .await
+                    .map_err(|e| str!("Failed to parse response: {e}"))?;
 
-            match data {
-                StatusData::Success { .. } => {
-                    success("Settings synchronized.");
-                }
+                success("Settings synchronized.");
+            } else {
+                // error 500 or another: read the error text from the body.
+                let err_msg = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown server error".to_string());
 
-                StatusData::Error { error: err_msg } => {
-                    error(err_msg.into());
-                }
+                error(format!("Server error ({}): {err_msg}", status).into());
             }
         }
 
@@ -54,7 +58,7 @@ pub async fn handle_status() -> Result<()> {
 
     section("Checking Server");
 
-    // checking Ovsy server:
+    // checking server:
     let res = client
         .get(&str!("http://127.0.0.1:{port}/status"))
         .send()
@@ -62,33 +66,36 @@ pub async fn handle_status() -> Result<()> {
 
     match res {
         Ok(response) => {
-            info("Status", &str!("Online (port {port})").green().to_string());
+            let status = response.status();
+            if status.is_success() {
+                info("Status", &str!("Online (port {port})").green().to_string());
 
-            // parsing agents list:
-            let data: StatusData = response
-                .json()
-                .await
-                .map_err(|e| str!("Failed to parse response: {e}"))?;
+                // successful response: we are parsing StatusData.
+                let data: StatusData = response
+                    .json()
+                    .await
+                    .map_err(|e| str!("Failed to parse response: {e}"))?;
 
-            match data {
-                StatusData::Success { agents } => {
-                    info("Agents", "");
+                info("Agents", "");
 
-                    if agents.is_empty() {
-                        warn("No agents loaded");
-                    } else {
-                        for AgentMetadata {
-                            name, description, ..
-                        } in agents
-                        {
-                            item(&name, &description.trim());
-                        }
+                if data.agents_list.is_empty() {
+                    warn("No agents loaded");
+                } else {
+                    for AgentMetadata {
+                        name, description, ..
+                    } in data.agents_list
+                    {
+                        item(&name, &description.trim());
                     }
                 }
+            } else {
+                // error 500 or another: read the error text from the body.
+                let err_msg = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read error body".to_string());
 
-                StatusData::Error { error: err_msg } => {
-                    error(format!("Server error: {err_msg}").into());
-                }
+                error(format!("Server error ({status}): {err_msg}").into());
             }
         }
         Err(_) => {

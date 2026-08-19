@@ -14,13 +14,14 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 [package]
-name = "ovsy-share"
+name = "osy-share"
 edition = "2024"
 
 [dependencies]
 macron.workspace = true
 atoman.workspace = true
 anylm.workspace = true
+pearce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

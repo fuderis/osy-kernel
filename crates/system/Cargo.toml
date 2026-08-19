@@ -14,11 +14,13 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 [package]
-name = "ovsy-system-agent"
+name = "osy-system"
+description = "Local system management agent. Provides hardware information, live system metrics, appearance management, power and media control."
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
-ovsy-share.workspace = true
+osy-share.workspace = true
 tokio.workspace = true
 macron.workspace = true
 atoman.workspace = true

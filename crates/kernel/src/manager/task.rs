@@ -2,7 +2,7 @@ use super::Tasks;
 use crate::{prelude::*, skills::task::TaskAction};
 
 use anylm::api::Content;
-use ovsy_share::{Event, EventTaskInfo};
+use osy_share::{Event, EventTaskInfo};
 use std::collections::HashSet;
 
 /// The agent tasks handle

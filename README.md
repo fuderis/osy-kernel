@@ -1,247 +1,115 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fuderis/ovsy/main/assets/logo.png" alt="Ovsy" width="80" />
+  <img src="https://raw.githubusercontent.com/fuderis/osy-kernel/main/assets/logo.png" alt="Logo" width="80" />
 </p>
 
-<h2 align="center">Ovsy Kernel</h2>
+<h1 align="center">Osy Kernel</h1>
 <p align="center">
-  <strong>A Unix-native orchestration kernel for lightweight AI assistants.</strong><br>
-  Built in Rust with a focus on predictable execution, low latency, and efficient LLM orchestration.
+  <strong>Deterministic, Token-Efficient Engine for Next-Gen AI Assistants</strong><br>
+  <code>lightweight</code> • <code>token-optimized</code> • <code>process-isolated</code> • <code>ultra-fast</code>
 </p>
+
+<img src="https://raw.githubusercontent.com/fuderis/osy-kernel/main/assets/cover.png" alt="Cover" width="100%" />
+<br><br>
+
+**Osy** is an open-source, high-performance orchestration kernel written in Rust. It is built for deploying ultra-lightweight, secure, and fully predictable personal and enterprise-grade AI assistants.
+
+Modern agentic frameworks often suffer from uncontrolled agent autonomy, runaway token usage, and context leaks. Osy solves these issues at a deep system level: agents are isolated at the process level, system calls are purged from dialogue history, and memory operates in a hybrid mode.
+
+> ⚠️ EXPERIMENTAL: Osy is undergoing rapid architectural evolution. Interfaces and IPC contracts may break between commits.
+Source audit is recommended before production deployment.
 
 ---
 
-<img src="https://raw.githubusercontent.com/fuderis/ovsy/main/assets/cover.png" alt="Cover" width="100%" />
+## Key Features
 
-Ovsy is an orchestration kernel for local and server-side AI assistants.<br>
+* **Extreme Context Optimization (Token Scrubbing):** Intermediate tool calls and service context are isolated and automatically purged from the active session history. You pay only for the final useful answers.
+* **Full Determinism (Star Topology):** Agents act as strict executors with no permission to communicate unauthorized with one another or enter infinite recursive loops. All planning and context control are strictly managed by the Kernel.
+* **Smart Hybrid Memory (RAG + Context Injection):** Automatic pre-fetching of relevant facts/embeddings before sending requests to the LLM, plus the model's ability to explicitly query the vector store on demand.
+* **Native UDS & SSE Transport:** Agent interaction occurs strictly via Unix Domain Sockets (IPC) without network stack overhead, featuring full support for Server-Sent Events (SSE) streaming.
+* **Secure Sandbox (Embedded JS):** Mathematical calculations, scripting, and data filtering are executed in an isolated Boa JS interpreter directly inside the process.
+* **Self-Healing Execution:** Automatic restarts for failed agents and localized prompt adjustments upon receiving invalid arguments from the model.
 
-Instead of building on top of HTTP, JSON-RPC, or heavyweight orchestration frameworks, Ovsy uses native Unix IPC,
-centralized task scheduling, and isolated worker processes to execute AI workflows with minimal overhead.<br>
+---
 
-The result is a system optimized for predictable execution, low latency, and efficient LLM usage instead of unrestricted orchestration flexibility.<br>
+## Architecture & Ecosystem
 
-> **⚠️ EXPERIMENTAL:** Ovsy is undergoing rapid architectural evolution. Interfaces and IPC contracts may break between commits.
-Source audit is recommended before production deployment.
+Osy utilizes a centralized orchestration model:
 
+<img src="https://raw.githubusercontent.com/fuderis/osy-kernel/main/assets/scheme.png" alt="Scheme" width="100%" />
 
-## Design Principles
+### Ecosystem of Specialized Rust Crates:
 
-### 1. Kernel-owned orchestration
+* **AnyLM:** Unified SDK layer for seamless operation across any model provider (OpenAI, Anthropic, Ollama, Local vLLM).
+* **Cistern:** High-level async abstraction built on top of Sled (fast KV store) and LanceDB (embedded vector DB).
+* **Pearce:** Axum-based networking engine with native UDS client and SSE streaming support.
+* **Atoman:** Thread-safe management of asynchronous state and kernel configurations.
+* **Boa JS:** Embedded lightweight JavaScript interpreter for deterministic computations without invoking external processes.
 
-**The kernel is the only component responsible for planning and scheduling work.**<br>
+---
 
+## Hybrid RAG & Smart Memory
 
-Agents never communicate directly with each other. They only receive their own task description and the outputs of dependent tasks,
-making execution deterministic and easier to reason about.
+Memory in Osy is split across several managed layers:
 
-### 2. Task-scoped context
+| Mechanism | Description |
+|---|---|
+| **Auto-Trigger Memory** | The kernel scans incoming context and automatically pulls relevant embeddings from LanceDB before sending the request to the LLM. |
+| **Explicit Model Pull** | The model can initiate memory calls (`search_fact`, `remember_fact`, `forget_fact`) on its own if it lacks sufficient data for an accurate response. |
+| **Dynamic System Prompts** | User preferences and global instructions are injected into the session in isolation without bloating the dialogue history. |
 
-**Each agent receives only the context required for its task instead of the complete conversation history.**<br>
+---
 
-This reduces prompt size, keeps responsibilities isolated, and avoids unnecessary context propagation between independent tasks.
+## Comparison: Standard Frameworks vs. Osy
 
-### 3. Persistent IPC workers
+| Parameter | Traditional Agent Frameworks | Osy Core Engine |
+|---|---|---|
+| **Agent Communication** | Mesh / P2P (agents spam each other) | Isolated Star (exclusively through Kernel) |
+| **Token Consumption** | Grows linearly with every Tool Call | Fixed (service context is scrubbed) |
+| **Memory** | Simple Vector Search / RAG | Hybrid RAG (Auto + Explicit + Dynamic Prompts) |
+| **Network Stack** | Heavy HTTP/REST wrappers | Native Unix Domain Sockets + SSE Stream |
+| **Predictability** | Probabilistic (high risk of hallucinations) | Deterministic (strict kernel scenarios) |
+| **Processes** | Spawning per request | Long-lived persistent IPC workers |
 
-**Agents run as long-lived Unix IPC services.**<br>
-
-Once activated, workers remain alive as IPC services instead of being spawned for every request.
-This removes repeated process startup overhead and keeps request latency consistent under sustained load.
-
-### 4. Minimal LLM orchestration
-
-**Ovsy intentionally minimizes orchestration calls.**<br>
-
-A typical request requires only:
-
-  1. planning the task graph;
-  2. executing the graph;
-  3. aggregating results and deciding whether another iteration is necessary.
-
-Additional model invocations occur only during bounded self-healing retries.
-
-### 5. Native process lifecycle
-
-**The kernel owns the lifecycle of every worker process.**<br>
-
-Child workers are attached to the kernel process. Unexpected worker failures can be recovered independently,
-while kernel termination automatically cleans up all child processes, preventing orphaned services and zombie processes.<br>
-
-* If a worker exits unexpectedly, it can be restarted independently.
-* If the kernel terminates, all child processes terminate with it, preventing orphaned background services.
-
-### 6. Unix-native IPC
-
-**Communication happens through Unix Domain Sockets instead of network protocols whenever all components run on the same machine.**<br>
-
-This removes unnecessary networking layers and avoids unnecessary networking and serialization overhead.
-
-
-## Architecture
-
-<img src="https://raw.githubusercontent.com/fuderis/ovsy/main/assets/scheme.png" alt="Scheme" width="100%" />
-
-Ovsy follows a centralized orchestration model.
-
-> `User Query` ➔ `Orchestrator Evaluation` ➔ `Concurrent Task Spawning` ➔ `Self-Healing Loop / Resolution`
-
-The kernel evaluates the user request, builds a dependency graph, schedules independent tasks concurrently, aggregates their outputs,
-and decides whether another execution cycle is required.<br>
-
-Agents are treated as isolated workers rather than autonomous decision-makers.
-
-
-### Architectural Decisions
-
-#### 1. Two-phase lifecycle
-
-**Problem:** Keeping every agent running wastes memory.<br>
-**Solution:** The metadata phase extracts static information once. The serve phase starts only when the kernel activates the worker.
-
-#### 2. Centralized orchestration
-
-**Problem:** Recursive agent communication quickly becomes expensive and difficult to control.<br>
-**Solution:** The kernel exclusively owns orchestration. Workers never coordinate directly.
-
-#### 3. Self-healing execution
-
-**Problem:** LLMs occasionally produce malformed tool arguments or incomplete responses.<br>
-**Solution:** The runtime retries failed execution with structured error feedback up to a configurable retry limit instead of aborting the pipeline.
-
-#### 4. Native IPC
-
-**Problem:** Loopback networking introduces unnecessary serialization and system-call overhead for local assistants.<br>
-**Solution:** Workers communicate through Unix Domain Sockets.
-
-#### 5. Embedded expression engine
-
-**Problem:** Simple deterministic work should not require an LLM.<br>
-**Solution:** JavaScript runtime evaluates expressions locally.
-
-#### 6. Process lifecycle
-
-**Problem:** Worker processes must not outlive the orchestrator.<br>
-**Solution:** Workers are tied to the kernel lifecycle through native operating system primitives, ensuring deterministic cleanup and recovery.
-
-#### 7. Long-lived workers
-
-**Problem:** Launching a process for every request introduces unnecessary latency.<br>
-**Solution:** Workers become persistent IPC services after activation and immediately accept new requests without repeated initialization.
-
-
-## Scope
-
-### Designed for
-
-Ovsy is built for lightweight AI assistants and automation workflows:
-
-* Local desktop assistants
-* Chat platforms and bots
-* Slack integrations
-* API automation
-* Computer control
-* Server-side assistant orchestration
-
-### Design Model
-
-Ovsy uses centralized orchestration.<br>
-
-Agents are isolated task executors managed by the kernel. They do not communicate directly with each other or create new agents.
-All planning, scheduling, and context distribution are controlled by the kernel.
-
-### Not a Generic Agent Runtime
-
-Ovsy is not designed to run existing autonomous agent frameworks or MCP agents without adaptation.<br>
-
-It intentionally favors predictable execution, low latency, reduced context size, and lower operational overhead over unrestricted agent autonomy.
-
+---
 
 ## Roadmap
 
-The following features are planned for the next development cycle (approximately the next 2–3 months).
+* [x] Long-Term Memory (RAG + Fact Storage)
+* [x] Task-Scoped Context & Token Scrubbing
+* [x] Native Process Lifecycle & UDS IPC
+* [ ] Native Web Search (Obscure integration)
 
-### Long-term Memory (RAG)
+---
 
-Persistent user memory with dynamic fact storage, editing, and retrieval.
-Integrated directly into the orchestrator rather than implemented as a standalone agent.
+## Quickstart
 
-### Personal Context
+### Requirements
+* **OS:** Unix-like (`Linux`, `macOS`, `BSD`)
+* **Rust:** `nightly` toolchain
+* **Dependencies:** `jq`
 
-Per-user persistent configuration managed by the orchestrator.<br>
-
-**Planned capabilities include:**
-
-  * custom system prompts
-  * optional user profile information (e.g. location, timezone, preferences)
-  * dynamic long-term memory (RAG)
-  * personal task management (TODOs and reminders)
-
-All data will be isolated per user and injected into execution only when relevant.
-
-### Web Search
-
-Native web search powered by the lightweight **Obscure** browser.
-Search will be available as a built-in orchestrator capability instead of an external agent.
-
-### CLI Improvements
-
-A complete rewrite of the interactive CLI chat experience to improve usability and reliability.
-
-
-## Ecosystem Components
-
-The core kernel externalizes infrastructural operations into specialized crates:
-
-  * **Atoman:** Thread-safe asynchronous state and core kernel configuration management.
-  * **AnyLM:** A unified SDK abstraction layer routing inference to cloud APIs or local execution nodes (such as LM Studio).
-  * **Pearce:** An ultra-lean asynchronous HTTP/IPC routing framework built on top of Axum.
-  * **Cistern:** High-performance vector retrieval (LanceDB) paired with a transactional Key-Value engine (Sled).
-
-> Ovsy keeps the orchestration kernel intentionally small. Infrastructure concerns such as inference, storage, routing,
-and state management are implemented as independent crates that can evolve without increasing kernel complexity.
-
-
-## Requirements
-
-* **Supported OS:** Unix-like operating systems  (`Linux`, `macOS`, `BSD`).
-* **Rust toolchain:** `cargo` and `rustc` (2024 edition or newer)
-* **JSON processor:** `jq` (required by `build.sh`)
-
-1. Installing Rust
+### Building from Source
 
 ```bash
-# 1. Install rustup
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# Clone repository
+git clone https://github.com/fuderis/osy-kernel.git && cd osy-kernel
 
-# 2. Install and set nightly toolchain
-rustup toolchain install nightly
-rustup default nightly
-```
-
-2. Installing JQ
-
-* **Arch Linux:** `sudo pacman -S jq`
-* **Ubuntu / Debian:** `sudo apt install -y jq`
-* **macOS:** `brew install jq`
-
-
-## Installation
-
-1. Clone the repository and run the build script:
-```bash
-git clone https://github.com/fuderis/ovsy.git && cd ovsy
+# Build project
 bash build.sh
+
+# Run CLI
+osy --help
 ```
 
-2. View all available CLI commands
-```bash
-ovsy --help
-```
+---
 
-## License & Feedback
+## Licensing & Commercial Usage
 
-> This software is distributed under the [GPL 3.0](https://github.com/fuderis/ovsy/blob/main/LICENSE.md) license.
+This project is distributed under the [**GNU General Public License v3.0 (GPL-3.0)**](LICENSE.md).
 
-You can contact me via [GitHub](https://github.com/fuderis) or send a message to my [E-Mail](mailto:synapdrake@ya.ru).
-Contributions, bug reports, feature requests, and feedback are always welcome.<br>
+### Dual Licensing
 
-*We invite you to participate in testing, finding edge cases, and optimizing Unix IPC pipelines.<br>
-Pull Requests and Issues are greatly appreciated!*
+* **Open Source Use:** You are free to use, modify, and deploy Osy in non-commercial or open-source projects in accordance with GPL-3.0.
+* **Commercial License:** To integrate the Osy kernel into proprietary commercial products without disclosing your source code, you must acquire a commercial license.
+
+> For commercial licensing inquiries and enterprise support, please contact the project author: **Bulat Sharipov** ([@fuderis](https://github.com/fuderis) / `synapdrake@ya.ru`).

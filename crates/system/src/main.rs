@@ -19,17 +19,15 @@ pub mod settings;
 
 pub mod handlers;
 pub mod skills;
-pub mod tools;
 
 use clap::{Parser, Subcommand};
 use pearce::Server;
 use prelude::*;
 
-pub const APP_NAME: &str = "ovsy-system-agent";
-pub const APP_VERSION: &str = "0.3.0";
-
 #[derive(Parser, Debug)]
-#[command(name = APP_NAME, version = APP_VERSION, about = "Ovsy AI Agent Core System Component")]
+#[command(name = env!("CARGO_PKG_NAME"))]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Args {
     #[command(subcommand)]
     command: Commands,
@@ -57,23 +55,32 @@ async fn main() -> Result<()> {
     // Handle subcommands
     match args.command {
         Commands::Metadata => {
-            let metadata = &Settings::get().metadata;
-            let json_output = serde_json::to_string(metadata)?;
+            let metadata = osy_share::agent_metadata!();
+            let json_output = serde_json::to_string(&metadata)?;
             println!("{json_output}");
             Ok(())
         }
 
         Commands::Serve => {
-            ovsy_share::macos_protect();
+            osy_share::macos_protect();
 
             // start server:
-            let sock = path!("$temp/ovsy/uds/{}.sock", Settings::get().metadata.name);
+            let sock = path!(
+                "$temp/osy/socks/{}.sock",
+                env!("CARGO_PKG_NAME").trim_start_matches("osy-")
+            );
+
+            info!("Launching on `{}`...", sock.display());
             Server::new()
                 //    HEALTH
                 .get("/ping", hands::health::handle_ping)
-                //    TOOLS
-                .post("/tools/list", hands::tools::handle_tools_list)
-                .post("/tools/call/{tool}", hands::tools::handle_tool_call)
+                //    SKILLS
+                .post("/skills/list", hands::skills::handle_skills_list)
+                .post("/skills/{skill}/tools", hands::skills::handle_tools_list)
+                .post(
+                    "/skills/{skill}/call/{tool}",
+                    hands::skills::handle_tool_call,
+                )
                 .run(sock)
                 .await
         }

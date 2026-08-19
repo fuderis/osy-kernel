@@ -93,8 +93,8 @@ trap cleanup EXIT
 # Stop Running Server
 ###############################################################################
 
-if command -v ovsy >/dev/null 2>&1; then
-    ovsy stop >/dev/null 2>&1 || true
+if command -v osy >/dev/null 2>&1; then
+    osy stop >/dev/null 2>&1 || true
 fi
 
 
