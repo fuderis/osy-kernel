@@ -76,6 +76,7 @@ Memory in Osy is split across several managed layers:
 * [x] Long-Term Memory (RAG + Fact Storage)
 * [x] Task-Scoped Context & Token Scrubbing
 * [x] Native Process Lifecycle & UDS IPC
+* [x] Embedded JS Engine (Boa Runtime for Isolated Computations)
 * [ ] Native Web Search (Obscure integration)
 
 ---
