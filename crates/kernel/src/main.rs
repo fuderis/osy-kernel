@@ -83,6 +83,17 @@ enum Commands {
     /// Open settings.toml in the default system editor
     #[command(alias = "conf")]
     Config,
+
+    /// Trace live ecosystem log files dynamically
+    Trace {
+        /// Optional User ID filter (also filters session IDs starting with `{uid}-`)
+        #[arg(short, long)]
+        uid: Option<u64>,
+
+        /// Follow mode only: ignore previous lines, stream new logs only
+        #[arg(short, long)]
+        only_new: bool,
+    },
 }
 
 #[tokio::main]
@@ -109,6 +120,9 @@ async fn main() -> Result<()> {
 
         //     CHAT
         Commands::Chat => cmds::chat::handle_chat(cli.load).await,
+
+        //    TRACING
+        Commands::Trace { uid, only_new } => cmds::trace::handle_trace(uid, only_new).await,
     } {
         cmds::error(e);
         std::process::exit(1);

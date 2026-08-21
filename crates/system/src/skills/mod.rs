@@ -20,8 +20,7 @@ pub fn skills_list() -> Vec<Skill> {
         Skill::new(
             str!(SkillName::Media),
             "Audio volume control, media playback (play/pause, stop, next/prev track) and search or play music.",
-            "TIP: You can find out the user’s favorite music using the `search_fact` tool (the query format matters). \n\
-            IMPORTANT!: NEVER TOUCH THE VOLUME unless the user has asked you to.",
+            "TIP: You can find out the user’s favorite music using the `search_fact` tool (the query format matters).",
         ),
         Skill::new(
             str!(SkillName::Power),
@@ -58,8 +57,6 @@ impl SkillExt for SkillName {
     }
 
     async fn tool_call(&self, tx: Sender<Bytes>, tool: String, payload: JsonValue) -> Result<()> {
-        warn!("WORKING...");
-
         match self {
             Self::Info => match tool.as_str() {
                 "get_system_info" => {
