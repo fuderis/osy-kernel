@@ -1,4 +1,5 @@
 use crate::prelude::*;
+
 use anylm::api::{Schema, Tool};
 use music_index::{MusicIndexer, SearchIntent};
 use system_utils::{AudioControl, MediaControl};
@@ -128,7 +129,7 @@ pub struct SeekAction {
 
 #[cfg(target_os = "linux")]
 #[log(skip_all)]
-pub async fn handle_media_play(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_play(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::play().await {
         Ok(_) => {
             let msg = "Media playback started successfully.";
@@ -142,7 +143,7 @@ pub async fn handle_media_play(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 #[log(skip_all)]
-pub async fn handle_media_pause(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_pause(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::pause().await {
         Ok(_) => {
             let msg = "Media playback paused successfully.";
@@ -155,7 +156,7 @@ pub async fn handle_media_pause(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
 }
 
 #[log(skip_all)]
-pub async fn handle_media_play_pause(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_play_pause(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::play_pause().await {
         Ok(_) => {
             let msg = "Media playback toggled successfully.";
@@ -168,7 +169,7 @@ pub async fn handle_media_play_pause(tx: Sender<Bytes>, _payload: ()) -> Result<
 }
 
 #[log(skip_all)]
-pub async fn handle_media_stop(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_stop(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::stop().await {
         Ok(_) => {
             let msg = "Media playback stopped successfully.";
@@ -181,7 +182,7 @@ pub async fn handle_media_stop(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
 }
 
 #[log(skip_all)]
-pub async fn handle_media_next_track(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_next_track(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::next_track().await {
         Ok(_) => {
             let msg = "Skipped to the next track successfully.";
@@ -194,7 +195,7 @@ pub async fn handle_media_next_track(tx: Sender<Bytes>, _payload: ()) -> Result<
 }
 
 #[log(skip_all)]
-pub async fn handle_media_previous_track(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_previous_track(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::previous_track().await {
         Ok(_) => {
             let msg = "Returned to the previous track successfully.";
@@ -239,7 +240,7 @@ pub async fn handle_media_seek_backward(tx: Sender<Bytes>, action: SeekAction) -
 }
 
 #[log(skip_all)]
-pub async fn handle_media_metadata(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_metadata(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::metadata().await {
         Ok(metadata) => {
             let msg = str!(metadata);
@@ -253,7 +254,7 @@ pub async fn handle_media_metadata(tx: Sender<Bytes>, _payload: ()) -> Result<()
 }
 
 #[log(skip_all)]
-pub async fn handle_media_position(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_position(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::position().await {
         Ok(position) => {
             let msg = str!("Current playback position: {:?}.", position);
@@ -266,7 +267,7 @@ pub async fn handle_media_position(tx: Sender<Bytes>, _payload: ()) -> Result<()
 }
 
 #[log(skip_all)]
-pub async fn handle_media_duration(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_media_duration(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::duration().await {
         Ok(duration) => {
             let msg = str!("Current media duration: {:?}.", duration);
@@ -331,7 +332,7 @@ pub async fn handle_decrease_volume(tx: Sender<Bytes>, action: DeltaVolumeAction
 }
 
 #[log(skip_all)]
-pub async fn handle_get_volume(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_get_volume(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match AudioControl::get_volume().await {
         Ok(volume) => {
             let msg = str!("The current audio volume level is {volume}%.");
@@ -366,7 +367,7 @@ pub async fn handle_set_mute(tx: Sender<Bytes>, action: MuteAction) -> Result<()
 }
 
 #[log(skip_all)]
-pub async fn handle_is_muted(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_is_muted(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match AudioControl::is_muted().await {
         Ok(is_muted) => {
             let msg = if is_muted {

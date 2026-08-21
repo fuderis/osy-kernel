@@ -6,10 +6,16 @@ pub use std::result::Result as StdResult;
 pub type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub type Result<T> = StdResult<T, DynError>;
 
-pub use atoman::*;
+pub use atoman::{
+    Config, Dir, File, Instrument, Logger, Map, MapGuard, MapGuardMut, Span, State, StateGuard,
+    error, info, log, warn,
+};
 pub use chrono::{DateTime, Local, Utc};
 pub use macron::*;
-pub use pearce::{Bytes, Client, Header, Headers, Json, Paths, Query, Response, Status, StreamExt};
+pub use pearce::{
+    Bytes, Client, Header, Headers, Json, Paths, Query, Receiver, Response, Sender, Status,
+    StreamExt,
+};
 
 pub use serde::{Deserialize, Serialize};
 pub use serde_json::{self as json, Value as JsonValue, json};

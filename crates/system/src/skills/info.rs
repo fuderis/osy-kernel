@@ -1,4 +1,5 @@
 use crate::prelude::*;
+
 use anylm::api::Tool;
 use system_utils::SystemMonitor;
 
@@ -28,7 +29,7 @@ pub fn tools_list() -> Vec<Tool> {
 }
 
 #[log(skip_all)]
-pub async fn handle_system_info(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_system_info(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let info = SYSTEM_MONITOR.lock().await.info();
     let msg = str!(info);
 
@@ -37,7 +38,7 @@ pub async fn handle_system_info(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
 }
 
 #[log(skip_all)]
-pub async fn handle_system_metrics(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_system_metrics(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let metrics = SYSTEM_MONITOR
         .lock()
         .await
@@ -50,7 +51,7 @@ pub async fn handle_system_metrics(tx: Sender<Bytes>, _payload: ()) -> Result<()
 }
 
 #[log(skip_all)]
-pub async fn handle_devices_list(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_devices_list(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let devices = SYSTEM_MONITOR
         .lock()
         .await

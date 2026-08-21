@@ -1,5 +1,5 @@
 use super::Task;
-use crate::{prelude::*, session::Session};
+use crate::{prelude::*, user::Session};
 
 use anylm::api::{Content, Messages};
 use tokio::task::JoinHandle;

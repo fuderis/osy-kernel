@@ -21,7 +21,7 @@ pub mod settings;
 pub mod context;
 pub mod manager;
 pub mod runtime;
-pub mod session;
+pub mod user;
 
 pub mod commands;
 pub mod handlers;

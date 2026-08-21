@@ -1,4 +1,5 @@
 use crate::prelude::*;
+
 use anylm::api::{Schema, Tool};
 use system_utils::{PowerManager, power::PowerMode};
 
@@ -75,7 +76,7 @@ pub async fn handle_schedule_power(tx: Sender<Bytes>, action: PowerAction) -> Re
 }
 
 #[log(skip_all)]
-pub async fn handle_cancel_power(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_cancel_power(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let msg = match PowerManager::cancel().await {
         Some(mode) => str!("Scheduled power action canceled. Canceled action: {mode}."),
         None => str!("There is no scheduled power action."),
@@ -87,7 +88,7 @@ pub async fn handle_cancel_power(tx: Sender<Bytes>, _payload: ()) -> Result<()> 
 }
 
 #[log(skip_all)]
-pub async fn handle_power_status(tx: Sender<Bytes>, _payload: ()) -> Result<()> {
+pub async fn handle_power_status(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let msg = match PowerManager::status().await {
         Some(task) => {
             str!(

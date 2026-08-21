@@ -3,8 +3,8 @@ use crate::{
     manager::Manager,
     prelude::*,
     runtime::Runtime,
-    session::Session,
     skills::{self, task::TaskAction},
+    user::Session,
 };
 
 use anylm::{
@@ -39,7 +39,7 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
 async fn read_session(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<Messages>>)> {
     info!("Reading the user session...");
 
-    let Some(session) = Session::get(&sid) else {
+    let Some(session) = Session::get(&sid).await else {
         return Err(Error::UnknownSessionId(sid).into());
     };
     let db_messages = session.lock().await.read_messages().await?;
@@ -102,22 +102,22 @@ async fn handle_query(
 
     let user_text = context::extract_text_from_msg(&message);
     info!(
-        "[RAG] Extracting text from user message: found = {}",
+        "[Facts] Extracting text from user message: found = {}",
         user_text.is_some()
     );
 
     if let Some(user_text) = user_text {
         if user_text.trim().is_empty() {
-            info!("[RAG] Extracted user text is empty, skipping facts search.");
+            info!("[Facts] Extracted user text is empty, skipping facts search.");
         } else {
             info!(
-                "[RAG] Generating embedding for query (len={})...",
+                "[Facts] Generating embedding for query (len={})...",
                 user_text.len()
             );
 
             match context::generate_embedding(&user_text, EmbeddingSearch::Query).await {
                 Ok(query_vec) => {
-                    info!("[RAG] Embedding generated successfully. Querying LanceDB facts...");
+                    info!("[Facts] Embedding generated successfully. Querying LanceDB facts...");
                     match session_guard
                         .search_facts(
                             query_vec,
@@ -129,12 +129,12 @@ async fn handle_query(
                         Ok(facts) => {
                             if facts.is_empty() {
                                 info!(
-                                    "[RAG] No facts met the similarity threshold ({}) or DB is empty.",
+                                    "[Facts] No facts met the similarity threshold ({}) or DB is empty.",
                                     context_options.fact_similarity
                                 );
                             } else {
                                 info!(
-                                    "[RAG] Loaded {} facts for sid={}: {:?}",
+                                    "[Facts] Loaded {} facts for sid={}: {:?}",
                                     facts.len(),
                                     sid,
                                     facts.iter().map(|f| &f.data.text).collect::<Vec<_>>()
@@ -150,19 +150,19 @@ async fn handle_query(
                             }
                         }
                         Err(e) => {
-                            error!("[RAG] Failed to search facts in LanceDB: {e}");
+                            error!("[Facts] Failed to search facts in LanceDB: {e}");
                         }
                     }
                 }
                 Err(e) => {
-                    error!("[RAG] Failed to generate embedding for text: {e}");
+                    error!("[Facts] Failed to generate embedding for text: {e}");
                     tx.send(Event::Error(str!("{e}\n")))?;
                 }
             }
         }
     } else {
         warn!(
-            "[RAG] Could not extract text content from incoming user Message! Skipping facts search."
+            "[Facts] Could not extract text content from incoming user Message! Skipping facts search."
         );
     }
 
@@ -205,6 +205,10 @@ async fn handle_query(
         memory_results.clear();
         let mut text_response = str!();
 
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
+        }
+
         let mut response = match Completions::try_from(completions_options.clone())?
             .tools(Manager::basic_tools().await)
             .send(messages.clone())
@@ -235,7 +239,10 @@ async fn handle_query(
 
         // Read AI chunks and collect tool calls
         let mut chunk_error = None;
-        while let Some(chunk) = response.next().await {
+        while let Some(chunk) = tokio::select! {
+            _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
+            chunk = response.next() => chunk,
+        } {
             match chunk {
                 Ok(Chunk::Text(text_part)) => {
                     text_response.push_str(&text_part);
@@ -329,6 +336,10 @@ async fn handle_query(
             }
         }
 
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
+        }
+
         if let Some(err) = chunk_error {
             retry_count += 1;
             if retry_count < max_retries {
@@ -348,7 +359,7 @@ async fn handle_query(
             }
         }
 
-        // Hallucination check
+        // hallucination check
         if agent_tasks.is_empty()
             && evals_list.is_empty()
             && memory_results.is_empty()
@@ -371,6 +382,10 @@ async fn handle_query(
             }
         }
 
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
+        }
+
         break;
     }
 
@@ -383,6 +398,10 @@ async fn handle_query(
             let content_item: Content = format!("Memory Operation Result:\n{res_text}").into();
             msg_guard.push_content(Some(&tool_call_id), content_item);
         }
+    }
+
+    if tx.is_closed() {
+        return Err(Error::ConnectionClosed.into());
     }
 
     // 4. Performing JS calculations
@@ -412,6 +431,10 @@ async fn handle_query(
         }
     }
 
+    if tx.is_closed() {
+        return Err(Error::ConnectionClosed.into());
+    }
+
     // 5. Parallel Tool/Agent Execution & Control Step Dispatch
     if !agent_tasks.is_empty() {
         info!("Executing {} agent tasks in parallel", agent_tasks.len());
@@ -435,9 +458,30 @@ async fn handle_query(
             );
         }
 
-        while let Some(res) = workers.join_next().await {
-            if let Err(e) = res {
-                error!("Agent task worker panicked: {e}");
+        loop {
+            tokio::select! {
+                // Отмена по закрытию канала (клиент ушел/отменил)
+                _ = tx.closed() => {
+                    warn!("Client disconnected, aborting agent execution");
+                    workers.abort_all(); // Явно убиваем все запущенные таски
+                    return Err(Error::ConnectionClosed.into());
+                }
+
+                // Выбираем следующий результат из JoinSet
+                maybe_res = workers.join_next() => {
+                    match maybe_res {
+                        Some(Ok(_)) => {
+                            // Таска успешно завершилась
+                        }
+                        Some(Err(e)) => {
+                            error!("Agent task worker panicked: {e}");
+                        }
+                        None => {
+                            // Все таски из JoinSet завершены, выходим из цикла
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -514,7 +558,7 @@ pub async fn handle_agent(
         .trim_end_matches('.')
         .replace('\n', " ");
 
-    let msg = str!("Handling `{}` agent: \"{log_query}...\"", agent_name);
+    let msg = str!("Handling `{agent_name}_{skill_name}` skill: \"{log_query}...\"");
     info!("{msg}");
     tx.send(Event::Thinking(msg)).ok();
 
@@ -532,7 +576,9 @@ pub async fn handle_agent(
         ])
         .user(vec![
             str!("{prompt}\n\n{query}",
-                prompt = "For the following request, you MUST use the provided tools and MUST NOT answer from your own knowledge. If no suitable tool is available, return an error explaining that the required tool does not exist. Never invent or assume tools that were not provided.",
+                prompt = "For the following request, you MUST use the provided tools and MUST NOT answer from your own knowledge. \
+                    If no suitable tool is available, return an error explaining that the required tool does not exist. \
+                    Never invent or assume tools that were not provided.",
                 query = task.query
             ).into()
         ])
@@ -544,6 +590,10 @@ pub async fn handle_agent(
 
     // Agent self-healing execution loop
     loop {
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
+        }
+
         tool_calls = vec![];
         let mut text_response = str!();
 
@@ -582,8 +632,7 @@ pub async fn handle_agent(
                         tx.send(Event::Thinking(format!(
                             "Stream error. Retrying {} agent execution...",
                             agent_name
-                        )))
-                        .ok();
+                        )))?;
                         agent_messages.lock().await.add_user(vec![
                             format!("An error occurred during output generation: {err}. Please try again using tools.").into()
                         ]);
@@ -604,8 +653,7 @@ pub async fn handle_agent(
                         tx.send(Event::Thinking(format!(
                             "Agent {} returned empty response. Retrying task...",
                             agent_name
-                        )))
-                        .ok();
+                        )))?;
                         agent_messages.lock().await.add_user(vec![
                             "You did not call any tools. Please execute the requested task using tools now.".into()
                         ]);
@@ -628,8 +676,7 @@ pub async fn handle_agent(
                     tx.send(Event::Thinking(format!(
                         "Request error. Retrying {} agent execution...",
                         agent_name
-                    )))
-                    .ok();
+                    )))?;
                     agent_messages.lock().await.add_user(vec![
                         format!("Failed to process request due to error: {e}. Please attempt to execute the task again.").into()
                     ]);
@@ -643,6 +690,9 @@ pub async fn handle_agent(
             }
         }
 
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
+        }
         if tool_calls.is_empty() {
             break;
         }
@@ -664,7 +714,7 @@ pub async fn handle_agent(
                     let log_json = func.json_str.replace('\n', " ");
 
                     let msg = format!(
-                        "Calling `{agent_name} -> {skill_name}.{}` tool: {log_json}",
+                        "Calling `{agent_name}_{skill_name}.{}` tool: {log_json}",
                         func.name
                     );
                     info!("{msg}");
@@ -688,8 +738,7 @@ pub async fn handle_agent(
                         tx.send(Event::Thinking(format!(
                             "Connection lost. Restarting agent {}...",
                             agent_name
-                        )))
-                        .ok();
+                        )))?;
 
                         let _ = Manager::stop(arc_name.clone()).await;
 
@@ -715,16 +764,17 @@ pub async fn handle_agent(
 
                     let mut full_text = str!();
 
-                    while let Some(event) = stream.recv().await? {
+                    while let Some(event) = tokio::select! {
+                        _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
+                        res = stream.recv() => res?,
+                    } {
                         match event {
-                            Event::Answer(text) => {
-                                full_text.push_str(&text);
-                            }
+                            Event::Answer(text) => full_text.push_str(&text),
                             Event::Thinking(text) => {
-                                tx.send(Event::Thinking(text))?;
+                                let _ = tx.send(Event::Thinking(text));
                             }
                             Event::Error(err) => {
-                                tx.send(Event::Error(err))?;
+                                let _ = tx.send(Event::Error(err));
                             }
                             Event::Finish => {}
                         }
@@ -736,20 +786,32 @@ pub async fn handle_agent(
             );
         }
 
-        while let Some(worker_result) = sub_workers.join_next().await {
-            let full_text: String =
-                worker_result.map_err(|e| str!("Worker tool call panicked: {e}"))??;
-            let content_item: Content = full_text.into();
+        loop {
+            tokio::select! {
+                // Отмена по закрытию канала (клиент ушел/отменил)
+                _ = tx.closed() => {
+                    warn!("Client disconnected, aborting agent execution");
+                    sub_workers.abort_all(); // ВАЖНО: явно убиваем все запущенные IPC таски
+                    return Err(Error::ConnectionClosed.into());
+                }
+                // Получение результата от таски
+                maybe_result = sub_workers.join_next() => {
+                    match maybe_result {
+                        Some(worker_result) => {
+                            let full_text: String = worker_result.map_err(|e| str!("Worker tool call panicked: {e}"))??;
+                            let content_item: Content = full_text.into();
 
-            agent_messages
-                .lock()
-                .await
-                .push_content(None, content_item.clone());
+                            agent_messages.lock().await.push_content(None, content_item.clone());
+                            messages.lock().await.push_content(Some(&task.tool_call_id), content_item);
+                        }
+                        None => break, // Все воркеры завершили работу
+                    }
+                }
+            }
+        }
 
-            messages
-                .lock()
-                .await
-                .push_content(Some(&task.tool_call_id), content_item);
+        if tx.is_closed() {
+            return Err(Error::ConnectionClosed.into());
         }
 
         break;

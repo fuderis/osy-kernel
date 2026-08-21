@@ -186,7 +186,7 @@ impl Manager {
             for skill in &agent.metadata.skills {
                 let _ = writeln!(
                     doc_builder,
-                    "* `{}.{}`: {}",
+                    "- `{}_{}`: {}",
                     agent.metadata.name,
                     skill.name,
                     skill.description.trim().replace("\n", "")

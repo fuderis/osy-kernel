@@ -1,4 +1,4 @@
-use crate::{context, prelude::*, session::Session, skills};
+use crate::{context, prelude::*, skills, user::Session};
 use anylm::{
     api::{Messages, Schema, Tool},
     completions::{Chunk, Completions},

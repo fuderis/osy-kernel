@@ -11,9 +11,7 @@ pub fn tools_list() -> Vec<Tool> {
         Tool::new("handle_task", "Delegates a task using a specific skill.")
             .required_property(
                 "skill",
-                Schema::string(
-                    "The skill required for this task (in `agent_name.skill_name` format).",
-                ),
+                Schema::string("The existing skill required for this task."),
             )
             .required_property(
                 "query",
@@ -33,9 +31,9 @@ pub struct TaskAction {
 }
 
 impl TaskAction {
-    /// Helper to get fully qualified skill name if needed ("agent.skill")
+    /// Helper to get fully qualified skill name if needed ("agent_skill")
     pub fn full_skill(&self) -> String {
-        format!("{}.{}", self.agent, self.skill)
+        format!("{}_{}", self.agent, self.skill)
     }
 }
 
@@ -120,9 +118,9 @@ impl<'de> Deserialize<'de> for TaskAction {
                 let query = query.ok_or_else(|| de::Error::missing_field("query"))?;
 
                 // Разбиваем skill на agent и skill прямо при десериализации
-                let (agent, skill) = raw_skill.split_once('.').ok_or_else(|| {
+                let (agent, skill) = raw_skill.split_once('_').ok_or_else(|| {
                     de::Error::custom(format!(
-                        "invalid skill format '{raw_skill}': expected 'agent.skill'"
+                        "invalid skill format '{raw_skill}': expected 'agent_skill'"
                     ))
                 })?;
 
