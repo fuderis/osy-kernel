@@ -12,7 +12,7 @@ use anylm::{
     completions::{Chunk, Completions},
     embeddings::EmbeddingSearch,
 };
-use osy_share::{Event, HandleQuery, SessionInfo};
+use osy_share::{Event, HandleQuery};
 use tokio::task::JoinSet;
 
 /// API: The user query handler
@@ -20,9 +20,9 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
     let HandleQuery { message } = data.0;
 
     Response::ok().stream(move |tx| async move {
-        let result = match read_session(sid).await {
+        let result = match Session::read(sid).await {
             Ok((session, messages)) => {
-                handle_query(sid, tx.clone(), session, messages, message, false).await
+                handle_query(sid, tx.clone(), session, messages, message, false, 0).await
             }
             Err(e) => Err(e),
         };
@@ -32,20 +32,6 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
             tx.send(Event::Error(str!(e))).ok();
         }
     })
-}
-
-/// Helper method to read user session from database
-#[log(skip_all, fields(sid = %sid))]
-async fn read_session(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<Messages>>)> {
-    info!("Reading the user session...");
-
-    let Some(session) = Session::get(&sid).await else {
-        return Err(Error::UnknownSessionId(sid).into());
-    };
-    let db_messages = session.lock().await.read_messages().await?;
-    let messages = arc_mutex!(Messages::from(db_messages));
-
-    Ok((session, messages))
 }
 
 /// Handles the user query with direct parallel tool execution and self-healing
@@ -58,9 +44,10 @@ async fn handle_query(
     messages: Arc<Mutex<Messages>>,
     message: Message,
     is_control: bool,
+    iteration: usize, // <--- Добавлен параметр для отслеживания глубины рекурсии
 ) -> Result<()> {
     // warn!("MESSAGES: {messages:#?}"); // DEBUG
-    info!("Processing the user query...");
+    info!("Processing the user query (iteration {iteration})...");
 
     let settings = Settings::get();
     let completions_options = settings.completions.options.clone();
@@ -72,7 +59,7 @@ async fn handle_query(
     let mut facts_prompt = String::new();
     let mut rules_prompt = String::new();
 
-    // Загружаем активные правила сессии (Глобальные + Локальные)
+    // load the active session rules (Global + Local).
     match session_guard.list_session_rules().await {
         Ok(rules) => {
             if !rules.is_empty() {
@@ -100,7 +87,7 @@ async fn handle_query(
         }
     }
 
-    let user_text = context::extract_text_from_msg(&message);
+    let user_text = helpers::extract_text_from_msg(&message);
     info!(
         "[Facts] Extracting text from user message: found = {}",
         user_text.is_some()
@@ -168,10 +155,10 @@ async fn handle_query(
 
     // 2. Preparing the context and system prompts
     let raw_messages = messages.lock().await.messages.clone();
-    let base_system_prompt = system_prompt(&session_guard.info, &settings);
+    let base_system_prompt = context::system_prompt(&session_guard.info, &settings);
     drop(session_guard);
 
-    // --- СОХРАНЯЕМ ВХОДЯЩЕЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ В БД ---
+    // SAVE THE USER’S INCOMING MESSAGE IN THE DB
     if !is_control {
         session.lock().await.write_message(message.clone()).await?;
     }
@@ -237,7 +224,7 @@ async fn handle_query(
             }
         };
 
-        // Read AI chunks and collect tool calls
+        // read AI chunks and collect tool calls
         let mut chunk_error = None;
         while let Some(chunk) = tokio::select! {
             _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
@@ -290,41 +277,25 @@ async fn handle_query(
                         }
                     },
 
-                    "forget_fact" => match tool_call.parse_args::<skills::fact::ForgetFactAction>()
-                    {
-                        Ok(act) => {
-                            let s = session.lock().await;
-                            match skills::fact::handle_forget_fact(&s, act.fact_id).await {
-                                Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
-                                Err(e) => {
-                                    chunk_error = Some(str!("Failed to remove fact: {e}").into());
-                                    break;
+                    "search_fact" => {
+                        match tool_call.parse_args::<skills::fact::SearchFactAction>() {
+                            Ok(act) => {
+                                let s = session.lock().await;
+                                match skills::fact::handle_search_fact(&s, act).await {
+                                    Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
+                                    Err(e) => {
+                                        chunk_error =
+                                            Some(str!("Failed to search facts: {e}").into());
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            chunk_error = Some(str!("Failed to parse forget_fact: {e}").into());
-                            break;
-                        }
-                    },
-
-                    "search_fact" => match tool_call.parse_args::<skills::fact::SearchFactAction>()
-                    {
-                        Ok(act) => {
-                            let s = session.lock().await;
-                            match skills::fact::handle_search_fact(&s, act).await {
-                                Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
-                                Err(e) => {
-                                    chunk_error = Some(str!("Failed to search facts: {e}").into());
-                                    break;
-                                }
+                            Err(e) => {
+                                chunk_error = Some(str!("Failed to parse search_fact: {e}").into());
+                                break;
                             }
                         }
-                        Err(e) => {
-                            chunk_error = Some(str!("Failed to parse search_fact: {e}").into());
-                            break;
-                        }
-                    },
+                    }
 
                     _ => {}
                 },
@@ -407,23 +378,24 @@ async fn handle_query(
     // 4. Performing JS calculations
     let has_evals = !evals_list.is_empty();
     if has_evals {
-        let results: Vec<(String, Content)> = {
+        let mut results = vec![];
+        for (tool_call_id, eval) in evals_list {
+            tx.send(Event::Thinking(format!(
+                "Executing JS script code: {:80}...",
+                &eval.code
+            )))?;
+
             let mut runtime = Runtime::new();
-            evals_list
-                .into_iter()
-                .map(|(tool_call_id, eval)| {
-                    let result: String = match runtime.eval(&eval.code) {
-                        Ok(res) => res,
-                        Err(e) => format!("JS Execution Error: {e}"),
-                    };
-                    let content_item: Content = format!("JS Result:\n{result}").into();
-                    (tool_call_id, content_item)
-                })
-                .collect()
-        };
+
+            let result: String = match runtime.eval(&eval.code) {
+                Ok(res) => res,
+                Err(e) => format!("JS Execution Error: {e}"),
+            };
+            let content_item: Content = format!("JS Result:\n{result}").into();
+            results.push((tool_call_id, content_item));
+        }
 
         for (tool_call_id, content_item) in results {
-            tx.send(Event::Thinking("Executing JS script code...".to_string()))?;
             messages
                 .lock()
                 .await
@@ -436,7 +408,8 @@ async fn handle_query(
     }
 
     // 5. Parallel Tool/Agent Execution & Control Step Dispatch
-    if !agent_tasks.is_empty() {
+    let has_tasks = !agent_tasks.is_empty();
+    if has_tasks {
         info!("Executing {} agent tasks in parallel", agent_tasks.len());
 
         let mut workers = JoinSet::new();
@@ -460,42 +433,62 @@ async fn handle_query(
 
         loop {
             tokio::select! {
-                // Отмена по закрытию канала (клиент ушел/отменил)
+                // cancellation due to channel closure (the client left/canceled)
                 _ = tx.closed() => {
                     warn!("Client disconnected, aborting agent execution");
                     workers.abort_all(); // Явно убиваем все запущенные таски
                     return Err(Error::ConnectionClosed.into());
                 }
 
-                // Выбираем следующий результат из JoinSet
+                // selecting the following result from the JoinSet
                 maybe_res = workers.join_next() => {
                     match maybe_res {
                         Some(Ok(_)) => {
-                            // Таска успешно завершилась
+                            // the task was completed successfully
                         }
                         Some(Err(e)) => {
                             error!("Agent task worker panicked: {e}");
                         }
                         None => {
-                            // Все таски из JoinSet завершены, выходим из цикла
+                            // all tasks from JoinSet have been completed; exiting the loop.
                             break;
                         }
                     }
                 }
             }
         }
+    }
 
-        info!("All parallel tasks completed. Launching control query...");
-        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()])
-            .visibility(Visibility::Internal);
+    // check the conditions for a recursive control call.
+    let should_continue = has_tasks || has_evals || has_memory_ops;
 
-        handle_query(sid, tx, session, messages, control_msg, true).await?;
-    } else if has_evals || has_memory_ops {
-        info!("JS evaluations or Memory operations finished. Launching control query...");
-        let control_msg = Message::user(vec![settings.completions.control_prompt.as_str().into()])
-            .visibility(Visibility::Internal);
+    if should_continue {
+        if iteration + 1 >= exec_options.max_iterations {
+            warn!(
+                "Reached maximum allowed iterations ({}), stopping recursive execution.",
+                exec_options.max_iterations
+            );
+            tx.send(Event::Finish)?;
 
-        handle_query(sid, tx, session, messages, control_msg, true).await?;
+            let to_save = messages
+                .lock()
+                .await
+                .slice(-1)
+                .into_iter()
+                .filter(|msg| msg.role.is_assistant())
+                .collect::<Vec<_>>();
+            session.lock().await.write_messages(to_save).await?;
+        } else {
+            info!(
+                "Sub-tasks finished. Launching control query (iteration {})...",
+                iteration + 1
+            );
+            let control_msg =
+                Message::user(vec![settings.completions.control_prompt.as_str().into()])
+                    .visibility(Visibility::Internal);
+
+            handle_query(sid, tx, session, messages, control_msg, true, iteration + 1).await?;
+        }
     } else {
         tx.send(Event::Finish)?;
         info!("Query processed directly (or control step finished)");
@@ -540,7 +533,6 @@ pub async fn handle_agent(
     };
 
     // 2. Getting tools via IPC
-    // warn!("SOCK PATH: {}", sock_path.display()); // DEBUG
     let client = Client::ipc(&sock_path.to_string_lossy());
     let response = client
         .post(&str!("/skills/{}/tools", task.skill))
@@ -567,24 +559,33 @@ pub async fn handle_agent(
     let exec_options = &settings.execution;
 
     // 3. Creating local context
-    let system_pr = system_prompt(&session.lock().await.info, &settings);
+    let agent_messages = {
+        let mut msgs = Messages::new();
 
-    let agent_messages = Messages::new()
-        .system(vec![
-            system_pr.into(),
-            skill_prompt.trim().into(),
-        ])
-        .user(vec![
-            str!("{prompt}\n\n{query}",
+        // add system prompt
+        let mut system_content =
+            vec![context::system_prompt(&session.lock().await.info, &settings).into()];
+
+        if !skill_prompt.trim().is_empty() {
+            system_content.push(skill_prompt.trim().into());
+        }
+
+        msgs.add_system(system_content);
+
+        // add user prompt
+        msgs.add_user(vec![
+            str!(
+                "{prompt}\n\n{query}",
                 prompt = "For the following request, you MUST use the provided tools and MUST NOT answer from your own knowledge. \
-                    If no suitable tool is available, return an error explaining that the required tool does not exist. \
-                    Never invent or assume tools that were not provided.",
+                          If no suitable tool is available, return an error explaining that the required tool does not exist. \
+                          Never invent or assume tools that were not provided.",
                 query = task.query
             ).into()
-        ])
-        .wrap();
+        ]);
 
-    let mut tool_calls = vec![];
+        msgs.wrap()
+    };
+
     let mut retry_count = 0;
     let max_retries = exec_options.max_retries.max(1);
 
@@ -594,7 +595,7 @@ pub async fn handle_agent(
             return Err(Error::ConnectionClosed.into());
         }
 
-        tool_calls = vec![];
+        let mut tool_calls = vec![];
         let mut text_response = str!();
 
         let response_res = Completions::try_from(options.clone())?
@@ -609,13 +610,10 @@ pub async fn handle_agent(
                     match chunk {
                         Ok(Chunk::Text(text_part)) => {
                             text_response.push_str(&text_part);
-                            tx.send(Event::Answer(text_part))?;
                         }
-
                         Ok(Chunk::Tool(tool_call)) => {
                             tool_calls.push(tool_call);
                         }
-
                         Err(e) => {
                             chunk_error = Some(e);
                             break;
@@ -693,11 +691,18 @@ pub async fn handle_agent(
         if tx.is_closed() {
             return Err(Error::ConnectionClosed.into());
         }
+
+        // if there are no sub‑tool calls, we return the final response.
         if tool_calls.is_empty() {
+            let mut global_msg_guard = messages.lock().await;
+            global_msg_guard.push_content(
+                Some(&task.tool_call_id),
+                Content::text(format!("Agent `{agent_name}` response:\n{text_response}")),
+            );
             break;
         }
 
-        // Parallel execution of sub-tool calls via IPC
+        // parallel execution of sub-tool calls via IPC
         let mut sub_workers = JoinSet::new();
 
         for tool_call in tool_calls {
@@ -711,6 +716,7 @@ pub async fn handle_agent(
             sub_workers.spawn(
                 async move {
                     let func = tool_call.func;
+                    let tool_call_id = tool_call.id;
                     let log_json = func.json_str.replace('\n', " ");
 
                     let msg = format!(
@@ -722,7 +728,6 @@ pub async fn handle_agent(
 
                     let request_path = format!("/skills/{}/call/{}", skill_name, func.name);
                     let request_body = func.parse_args::<JsonValue>()?;
-                    // warn!("RESPONSE: {:?}: {:#?}", &request_path, &request_body); // DEBUG
 
                     let mut response = client
                         .post(&request_path)
@@ -780,71 +785,42 @@ pub async fn handle_agent(
                         }
                     }
 
-                    Ok::<String, DynError>(full_text)
+                    Ok::<(String, String), DynError>((tool_call_id, full_text))
                 }
                 .instrument(Span::current()),
             );
         }
 
+        // collect the results of all the launched subtasks.
         loop {
             tokio::select! {
-                // Отмена по закрытию канала (клиент ушел/отменил)
                 _ = tx.closed() => {
-                    warn!("Client disconnected, aborting agent execution");
-                    sub_workers.abort_all(); // ВАЖНО: явно убиваем все запущенные IPC таски
+                    sub_workers.abort_all();
                     return Err(Error::ConnectionClosed.into());
                 }
-                // Получение результата от таски
-                maybe_result = sub_workers.join_next() => {
-                    match maybe_result {
-                        Some(worker_result) => {
-                            let full_text: String = worker_result.map_err(|e| str!("Worker tool call panicked: {e}"))??;
-                            let content_item: Content = full_text.into();
-
-                            agent_messages.lock().await.push_content(None, content_item.clone());
-                            messages.lock().await.push_content(Some(&task.tool_call_id), content_item);
+                maybe_res = sub_workers.join_next() => {
+                    match maybe_res {
+                        Some(Ok(Ok((call_id, result_text)))) => {
+                            let mut guard = agent_messages.lock().await;
+                            guard.push_content(
+                                Some(&call_id),
+                                Content::text(format!("Tool execution result:\n{result_text}")),
+                            );
                         }
-                        None => break, // Все воркеры завершили работу
+                        Some(Ok(Err(e))) => {
+                            error!("Sub-tool execution failed: {e}");
+                            return Err(e);
+                        }
+                        Some(Err(e)) => {
+                            error!("Sub-tool worker panicked: {e}");
+                            return Err(e.into());
+                        }
+                        None => break,
                     }
                 }
             }
         }
-
-        if tx.is_closed() {
-            return Err(Error::ConnectionClosed.into());
-        }
-
-        break;
     }
 
     Ok(())
-}
-
-/// Generates the system prompt
-fn system_prompt(info: &SessionInfo, settings: &Settings) -> String {
-    let now_utc = Utc::now();
-    let now_local = helpers::now_local(info.timezone);
-
-    settings
-        .completions
-        .system_prompt
-        .trim()
-        .replace(
-            "{DATETIME_LOCAL}",
-            &now_local
-                .format("%A, %B %d, %Y, %I:%M:%S %p %Z")
-                .to_string(),
-        )
-        .replace(
-            "{DATETIME_GLOBAL}",
-            &now_utc.format("%A, %B %d, %Y, %I:%M:%S %p UTC").to_string(),
-        )
-        .replace(
-            "{CURRENT_PATH}",
-            &info
-                .current_path
-                .clone()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_default(),
-        )
 }

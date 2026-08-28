@@ -126,8 +126,8 @@ pub struct ThemeOptions {
 impl Default for ThemeOptions {
     fn default() -> Self {
         Self {
-            brand_color: (255, 85, 65),
-            alt_color: (140, 120, 81),
+            brand_color: (255, 22, 25),
+            alt_color: (226, 226, 226),
             bg_color: (13, 17, 29),
             blink_color: (20, 26, 42),
         }
@@ -193,13 +193,16 @@ pub struct ExecutionOptions {
     pub preserve_messages: usize,
     /// The maximum number of retries for failed AI calls
     pub max_retries: usize,
+    /// The maximum number of recursive calls to the LLM
+    pub max_iterations: usize,
 }
 
 impl ::std::default::Default for ExecutionOptions {
     fn default() -> Self {
         Self {
             preserve_messages: 2,
-            max_retries: 5,
+            max_retries: 3,
+            max_iterations: 5,
         }
     }
 }

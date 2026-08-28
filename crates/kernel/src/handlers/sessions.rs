@@ -6,13 +6,13 @@ use anylm::{
 };
 use osy_share::{CompactQuery, Event, RemoveQuery, SessionId, SessionInfo, SetQuery};
 
-/// Initializes the user session and returns its messages
+/// API: Initializes the user session and returns its messages
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) -> Response {
     let session_info = data.0;
     info!("Handling session init/get...");
 
-    // Check active session, or initialize a new one
+    // check active session, or initialize a new one
     let session_shared = match Session::get(&sid).await {
         Some(existing) => {
             info!("Found existing session in memory");
@@ -54,7 +54,7 @@ pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) 
     }
 }
 
-/// Finishes the user session and flushes DB to prevent lock contention
+/// API: Finishes the user session and flushes DB to prevent lock contention
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_finish(Paths(sid): Paths<SessionId>) -> Response {
     info!("Attempting Session::finish...");
@@ -264,7 +264,7 @@ pub async fn handle_clone(Paths(sid): Paths<SessionId>) -> Response {
 
 // --- LOCAL SESSION RULES HANDLERS ---
 
-/// Lists active rules (global + local) for a session
+/// API: Lists active rules (global + local) for a session
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_rules_list(Paths(sid): Paths<SessionId>) -> Response {
     info!("Looking up Session::get...");
@@ -295,7 +295,7 @@ pub async fn handle_rules_list(Paths(sid): Paths<SessionId>) -> Response {
     }
 }
 
-/// Adds or updates a rule in the session or global context
+/// API: Adds or updates a rule in the session or global context
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_rules_set(Paths(sid): Paths<SessionId>, data: Json<SetQuery>) -> Response {
     let SetQuery { id, text } = data.0;
@@ -338,7 +338,7 @@ pub async fn handle_rules_set(Paths(sid): Paths<SessionId>, data: Json<SetQuery>
     }
 }
 
-/// Removes a rule from the active session context by ID
+/// API: Removes a rule from the active session context by ID
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_rules_remove(
     Paths(sid): Paths<SessionId>,
@@ -380,7 +380,7 @@ pub async fn handle_rules_remove(
     }
 }
 
-/// Clears only the local rules for a session
+/// API: Clears only the local rules for a session
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_rules_clear(Paths(sid): Paths<SessionId>) -> Response {
     info!("Requesting clear_local_rules...");

@@ -1,5 +1,5 @@
 use super::{error, info, success};
-use crate::{context::extract_text_from_msg, prelude::*};
+use crate::{helpers, prelude::*};
 
 use anylm::api::{Message, Messages, Role, Visibility};
 use chrono::Local;
@@ -138,7 +138,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                             current_user_msg = Some(msg);
                         }
                         Role::Assistant => {
-                            let text = extract_text_from_msg(msg).unwrap_or_default();
+                            let text = helpers::extract_text_from_msg(msg).unwrap_or_default();
                             // bind assistant message only when non-empty textual content exists
                             if !text.trim().is_empty() {
                                 if current_user_msg.is_some() {
@@ -160,12 +160,14 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
 
                 // render paired history entries into terminal widgets
                 for (user_or_single_msg, assistant_msg) in pairs {
-                    let user_text = extract_text_from_msg(user_or_single_msg).unwrap_or_default();
+                    let user_text =
+                        helpers::extract_text_from_msg(user_or_single_msg).unwrap_or_default();
 
                     let (user_display_text, asst_display_text) =
                         match (user_or_single_msg.role.clone(), assistant_msg) {
                             (Role::User, Some(asst)) => {
-                                let asst_text = extract_text_from_msg(asst).unwrap_or_default();
+                                let asst_text =
+                                    helpers::extract_text_from_msg(asst).unwrap_or_default();
                                 (user_text.clone(), asst_text)
                             }
                             (Role::User, None) => (user_text.clone(), String::new()),
@@ -180,7 +182,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         })
                         .unwrap_or_else(|| Local::now().format("%a %I:%M %p").to_string());
 
-                    Text::new(user_display_text.dim().to_string())
+                    Text::new(user_display_text.grey().to_string())
                         .title(format!(" {timestamp_str} ").with(alt_color), Align::TopLeft)
                         .min_width(MIN_WIDTH)
                         .border(BorderStyle::Rounded)
@@ -188,8 +190,8 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         .background(bg_color)
                         .prefix_color(alt_color)
                         .prefix_line(LineStyle::Solid)
-                        .bullet_color(alt_color)
-                        .code_color(alt_color)
+                        .bullet_color(brand_color)
+                        .code_color(brand_color)
                         .padding(Padding::hor(1))
                         .margin(Margin::default().bottom(1))
                         .handler(async move |handle| {
@@ -207,7 +209,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                     "Loaded {} messages from history.",
                     (valid_messages.len() / 2).max(1)
                 );
-                Text::new(info_msg.italic().dim().to_string())
+                Text::new(info_msg.italic().grey().to_string())
                     .min_width(MIN_WIDTH)
                     .border(BorderStyle::Rounded)
                     .border_color(brand_color)
@@ -272,17 +274,17 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                 let args: Vec<&str> = trimmed.split_whitespace().collect();
                 let is_global = args.iter().any(|&a| a == "-g");
 
-                // Главное имя команды (например, "facts", "rules", "remember")
+                // the main command name (e.g., "facts", "rules", "remember")
                 let cmd = args[0].trim_start_matches('/').to_lowercase();
 
-                // Второе слово (действие), если передано
+                // the second word (action), if passed
                 let sub_cmd = args.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
 
-                // Чистые аргументы без имени команды, подкоманды и флага -g
+                // pure arguments without a command name, subcommand, or -g flag.
                 let clean_args: Vec<&str> =
                     args[1..].iter().copied().filter(|&a| a != "-g").collect();
 
-                // Если есть подкоманда (например, "set" в "/facts set"), аргументы нагрузки начинаются с 2-го элемента
+                // if there is a subcommand (for example, “set” in "/facts set"), the load arguments start from the 2nd element.
                 let payload = if !clean_args.is_empty() && clean_args[0].to_lowercase() == sub_cmd {
                     clean_args[1..].join(" ")
                 } else {
@@ -291,7 +293,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
 
                 let sid = session_id.lock().await.clone();
 
-                // Хелпер для форматирования длинных строк (безопасно для UTF-8 / кириллицы)
+                // helper for formatting long strings (safe for UTF-8 / Cyrillic)
                 let truncate = |s: &str, max_len: usize| -> String {
                     let char_count = s.chars().count();
                     if char_count > max_len {
@@ -302,7 +304,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                     }
                 };
 
-                // Хелпер для отображения результатов в UI
+                // helper for displaying results in the UI
                 let render_msg = |msg: String| async move {
                     Text::new("")
                         .min_width(MIN_WIDTH)
@@ -924,16 +926,15 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                     }
 
                     "clone" | "fork" => {
-                        // 1. Получаем ID текущей (исходной) сессии
+                        // obtain the ID of the current (original) session.
                         let old_sid = session_id.lock().await.clone();
 
-                        // 2. Вспомогательная структура для десериализации ответа сервера
                         #[derive(serde::Deserialize)]
                         struct CloneResponse {
                             id: SessionId,
                         }
 
-                        // 3. Отправляем POST-запрос на клонирование
+                        // send a POST request for cloning.
                         let msg = match client
                             .post(&format!("{base_url}/sessions/{old_sid}/clone"))
                             .send()
@@ -942,15 +943,15 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                             Ok(res) => {
                                 let status = res.status();
                                 if status.is_success() {
-                                    // 4. Считываем JSON с новым ID из ответа сервера
+                                    // read the JSON with the new ID from the server response.
                                     match res.json::<CloneResponse>().await {
                                         Ok(payload) => {
                                             let new_sid = payload.id;
 
-                                            // 5. Обновляем локальный ID сессии
+                                            // updating the local session ID
                                             *session_id.lock().await = new_sid.clone();
 
-                                            // Отправляем сигнал на закрытие предыдущей сессии
+                                            // sending a signal to close the previous session
                                             client
                                                 .post(&format!(
                                                     "{base_url}/sessions/{old_sid}/finish"
@@ -1076,7 +1077,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
             let query_msg = Message::user(vec![trimmed.into()]);
 
             // render active prompt box and stream completion events from server
-            Text::new(format!("{}", trimmed.dim()))
+            Text::new(format!("{}", trimmed.grey()))
                 .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
                 .min_width(MIN_WIDTH)
                 .spinner_style(SpinnerStyle::MiniDots)
@@ -1126,8 +1127,8 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                 })
                 .blink_color(blink_color)
                 .prefix_color(alt_color)
-                .bullet_color(alt_color)
-                .code_color(alt_color)
+                .bullet_color(brand_color)
+                .code_color(brand_color)
                 .render()
                 .await?;
         }

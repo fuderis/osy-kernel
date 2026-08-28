@@ -432,7 +432,27 @@ pub async fn handle_search_music(tx: Sender<Bytes>, mut action: MusicAction) -> 
     let msg = if tracks.is_empty() {
         str!("No matching music was found.")
     } else {
-        str!("Found {count} matching track(s).", count = tracks.len())
+        // Берем первые 10-15 треков для контекста LLM
+        let limit = 15;
+        let preview: Vec<_> = tracks
+            .iter()
+            .take(limit)
+            .map(|t| format!("- {} — {} ({})", t.band, t.name, t.path.display()))
+            .collect();
+
+        let extra_count = tracks.len().saturating_sub(limit);
+        let extra_msg = if extra_count > 0 {
+            format!("\n...and {} more tracks.", extra_count)
+        } else {
+            String::new()
+        };
+
+        str!(
+            "Found {} matching track(s):\n{}{}",
+            tracks.len(),
+            preview.join("\n"),
+            extra_msg
+        )
     };
 
     info!("{msg}");

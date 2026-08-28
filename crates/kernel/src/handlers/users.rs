@@ -2,7 +2,7 @@ use crate::{context, prelude::*, user::UserState};
 use anylm::embeddings::EmbeddingSearch;
 use osy_share::{ListQuery, RemoveQuery, SearchQuery, SetQuery};
 
-/// Handles the user sessions list
+/// API: Handles the user sessions list
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
     let count = data.0.count.unwrap_or(0);
@@ -16,7 +16,7 @@ pub async fn handle_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
     }
 }
 
-/// Lists all user facts stored in RAG memory
+/// API: Lists all user facts stored in RAG memory
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_facts_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
     let user_guard = match UserState::get_or_init(*uid).await {
@@ -38,7 +38,7 @@ pub async fn handle_facts_list(uid: Paths<u64>, data: Json<ListQuery>) -> Respon
     }
 }
 
-// TODO: /// Vector search across user facts
+// TODO: /// API: Vector search across user facts
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_facts_search(uid: Paths<u64>, _data: Json<SearchQuery>) -> Response {
     Response::error().text("This endpoint is not implemented yet, sorry =(..")
@@ -61,10 +61,10 @@ pub async fn handle_facts_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
         }
     }
 
-    // 1. Нормализуем исходный текст факта
+    // normalize the source text of the fact
     let search_text = context::normalize_fact_text(&text).await;
 
-    // 2. Генерируем эмбеддинг по нормализованному тексту
+    // generate an embedding based on the normalized text.
     let embedding = match context::generate_embedding(&search_text, EmbeddingSearch::Document).await
     {
         Ok(emb) => emb,
@@ -74,7 +74,7 @@ pub async fn handle_facts_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
         }
     };
 
-    // 3. Сохраняем факт вместе с нормализованным текстом в DB
+    // save the fact together with the normalized text in the DB.
     let user_guard = match UserState::get_or_init(*uid).await {
         Ok(guard) => guard,
         Err(e) => return Response::error().text(e.to_string()),
@@ -92,7 +92,7 @@ pub async fn handle_facts_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
     }
 }
 
-/// Removes a single fact by its ID
+/// API: Removes a single fact by its ID
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_facts_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Response {
     let user_guard = match UserState::get_or_init(*uid).await {
@@ -109,7 +109,7 @@ pub async fn handle_facts_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Re
     }
 }
 
-/// Clears all user facts from RAG database
+/// API: Clears all user facts from RAG database
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_facts_clear(uid: Paths<u64>) -> Response {
     let user_guard = match UserState::get_or_init(*uid).await {
@@ -126,7 +126,7 @@ pub async fn handle_facts_clear(uid: Paths<u64>) -> Response {
     }
 }
 
-/// Lists global rules for the specified user
+/// API: Lists global rules for the specified user
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_rules_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
     let user_guard = match UserState::get_or_init(*uid).await {
@@ -148,7 +148,7 @@ pub async fn handle_rules_list(uid: Paths<u64>, data: Json<ListQuery>) -> Respon
     }
 }
 
-/// Adds or updates a global user rule
+/// API: Adds or updates a global user rule
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_rules_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response {
     let SetQuery { id, text } = data.0;
@@ -168,7 +168,7 @@ pub async fn handle_rules_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
     }
 }
 
-/// Removes a global user rule by ID
+/// API: Removes a global user rule by ID
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_rules_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Response {
     let rule_id = data.id;
@@ -187,7 +187,7 @@ pub async fn handle_rules_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Re
     }
 }
 
-/// Clears all global rules for the user
+/// API: Clears all global rules for the user
 #[log(skip_all, fields(uid = %*uid))]
 pub async fn handle_rules_clear(uid: Paths<u64>) -> Response {
     let user_guard = match UserState::get_or_init(*uid).await {

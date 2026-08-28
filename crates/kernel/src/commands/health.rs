@@ -175,7 +175,10 @@ pub async fn handle_config() -> Result<()> {
     #[cfg(target_os = "macos")]
     let opener = "open";
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     match Command::new(opener).arg(&path).spawn() {
         Ok(_) => success("Config file opened in default editor."),
         Err(e) => error(str!("Failed to open config: {e}").into()),

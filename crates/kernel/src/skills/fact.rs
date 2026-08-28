@@ -1,7 +1,6 @@
-use crate::{context, prelude::*, skills, user::Session};
+use crate::{context, helpers, prelude::*, user::Session};
 use anylm::{
-    api::{Messages, Schema, Tool},
-    completions::{Chunk, Completions},
+    api::{Schema, Tool},
     embeddings::EmbeddingSearch,
 };
 
@@ -16,16 +15,6 @@ pub fn tools_list() -> Vec<Tool> {
         .required_property(
             "text",
             Schema::string("The clear, natural text description of the fact to store."),
-        ),
-
-        Tool::new(
-            "forget_fact",
-            "Removes a specific fact from long-term memory by its ID. \
-            Use this when a previously remembered fact is obsolete, incorrect, or the user explicitly asks to forget it.",
-        )
-        .required_property(
-            "fact_id",
-            Schema::integer("The unique numerical ID of the fact to forget."),
         ),
 
         Tool::new(
@@ -76,22 +65,19 @@ pub struct SearchFactAction {
 }
 
 /// Saves a new fact to the user's vector storage with automatic embedding generation
-pub async fn handle_remember_fact(
-    session: &Session,
-    action: skills::fact::RememberFactAction,
-) -> Result<String> {
+pub async fn handle_remember_fact(session: &Session, action: RememberFactAction) -> Result<String> {
     let fact_text = action.text.trim().to_string();
     if fact_text.is_empty() {
         return Ok("Fact text cannot be empty.".into());
     }
 
-    // 1. Нормализуем текст с помощью вынесенной функции
+    // normalize the text using a separate function.
     let search_text = context::normalize_fact_text(&fact_text).await;
 
-    // 2. Генерируем эмбеддинг по нормализованному тексту
+    // generate an embedding based on the normalized text.
     let embedding = context::generate_embedding(&search_text, EmbeddingSearch::Document).await?;
 
-    // 3. Сохраняем факт в базу данных
+    // saving the fact to the database
     session
         .save_fact(embedding, fact_text.clone(), Some(search_text.into()))
         .await?;
@@ -100,73 +86,23 @@ pub async fn handle_remember_fact(
     Ok(format!("Fact successfully saved: \"{fact_text}\""))
 }
 
-/// Removes a specific fact from the user's vector storage by its ID
-pub async fn handle_forget_fact(session: &Session, fact_id: u64) -> Result<String> {
-    session.remove_fact(fact_id).await?;
-
-    info!("Removed user fact #{fact_id}");
-    Ok(format!("Fact #{fact_id} successfully removed."))
-}
-
 /// Searches for relevant user facts using semantic vector search
-pub async fn handle_search_fact(
-    session: &Session,
-    action: skills::fact::SearchFactAction,
-) -> Result<String> {
-    #[derive(Deserialize)]
-    struct TranslatedQuery {
-        translated_text: String,
-    }
-
+pub async fn handle_search_fact(session: &Session, action: SearchFactAction) -> Result<String> {
     let raw_query = action.search_text.trim();
     if raw_query.is_empty() {
         return Ok("Search query is empty.".into());
     }
 
-    // 1. Быстро определяем язык запроса
-    let is_english = whatlang::detect(raw_query)
-        .map(|info| info.lang() == whatlang::Lang::Eng)
-        .unwrap_or(false);
-
-    // 2. Если не английский — переводим через LLM с принудительной JSON Schema
-    let query_text = if !is_english {
-        let settings = Settings::get();
-        let messages = Messages::new()
-            .system(vec![
-                "You are a translator. Translate the given user search query to English for semantic vector search.".into(),
-            ])
-            .user(vec![raw_query.into()])
-            .wrap();
-
-        let mut response = Completions::try_from(settings.completions.options.clone())?
-            .schema(
-                Schema::object("Search query translation structure").required_property(
-                    "translated_text",
-                    Schema::string("Clear English translation of the search query"),
-                ),
-            )
-            .send(messages)
-            .await?;
-
-        let mut json_str = String::new();
-        while let Some(chunk) = response.next().await {
-            if let Chunk::Text(text) = chunk? {
-                json_str.push_str(&text);
-            }
-        }
-
-        // Парсим гарантированный JSON, при ошибке откатываемся на сырой запрос
-        serde_json::from_str::<TranslatedQuery>(&json_str)
-            .map(|parsed| parsed.translated_text)
-            .unwrap_or_else(|e| {
-                warn!("Failed to parse translated query JSON, fallback to raw query: {e}");
-                raw_query.to_string()
-            })
+    // if it’s not English, translate it using LLM.
+    let query_text = if !helpers::is_english(raw_query) {
+        context::translate_into_english(raw_query)
+            .await
+            .unwrap_or(raw_query.to_string())
     } else {
         raw_query.to_string()
     };
 
-    // 3. Генерируем эмбеддинг по строго английскому тексту
+    // generate an embedding based on strictly English text.
     let embedding = context::generate_embedding(&query_text, EmbeddingSearch::Query).await?;
 
     let settings = Settings::get();
@@ -192,7 +128,6 @@ pub async fn handle_search_fact(
     );
 
     for record in records {
-        // Убрано отображение метки [PINNED], так как факты больше не поддерживают закрепление
         response.push_str(&format!("  * [ID: {}] {}\n", record.id, record.data.text));
     }
 

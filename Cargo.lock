@@ -540,9 +540,9 @@ dependencies = [
 
 [[package]]
 name = "atoman"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9e9b74eabc43ddc6931d968c46a96ab6e992f9b6828a7b49ae90cc77601b5b3"
+checksum = "24ed976b0ef7cf81ce32519afd9b6006f74cd4771a2b704339cc2b6b8120f1ab"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -5011,9 +5011,9 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
 name = "music-index"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09389cb039bd98250863f1499e62c164392bef687ad5427b537301cab9606423"
+checksum = "8dbdc57af9d31a90b55a69f84293dd0f8a79ef6227ee7b27fdb4869b599adb82"
 dependencies = [
  "fuzzy-cmp 0.2.0",
  "lofty",
@@ -5626,10 +5626,10 @@ dependencies = [
 
 [[package]]
 name = "osy"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anylm",
- "atoman 0.6.0",
+ "atoman 0.6.1",
  "boa_engine",
  "chrono",
  "cistern",
@@ -5654,7 +5654,7 @@ name = "osy-share"
 version = "0.0.0"
 dependencies = [
  "anylm",
- "atoman 0.6.0",
+ "atoman 0.6.1",
  "chrono",
  "macron 0.5.0",
  "pearce",
@@ -5669,7 +5669,7 @@ name = "osy-system"
 version = "0.4.0"
 dependencies = [
  "anylm",
- "atoman 0.6.0",
+ "atoman 0.6.1",
  "chrono",
  "clap",
  "macron 0.5.0",
@@ -6529,9 +6529,9 @@ dependencies = [
 
 [[package]]
 name = "rigging"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b16637aee53a18dea1f807ef6c4b7dc686e760bdc561ba335679ef23b058fc4"
+checksum = "495cac5b0a8216e92226b10379e49e1f44c2b04338c5ce1edfef204fad105824"
 dependencies = [
  "adot-tree-sitter-toml",
  "async-trait",

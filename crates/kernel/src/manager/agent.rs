@@ -79,7 +79,17 @@ impl Agent {
             }
         }
 
-        let child = cmd.spawn()?;
+        let child = {
+            #[cfg(windows)]
+            {
+                cmd.spawn_group()?
+            }
+
+            #[cfg(not(windows))]
+            {
+                cmd.spawn()?
+            }
+        };
 
         // 4. Ping the server via POST /ping until it wakes up
         let client = Client::ipc(&sock_path.to_string_lossy());

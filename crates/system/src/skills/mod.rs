@@ -20,7 +20,7 @@ pub fn skills_list() -> Vec<Skill> {
         Skill::new(
             str!(SkillName::Media),
             "Audio volume control, media playback (play/pause, stop, next/prev track) and search or play music.",
-            "TIP: You can find out the user’s favorite music using the `search_fact` tool (the query format matters).",
+            "",
         ),
         Skill::new(
             str!(SkillName::Power),

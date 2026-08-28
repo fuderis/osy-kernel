@@ -17,8 +17,7 @@ Modern agentic frameworks often suffer from uncontrolled agent autonomy, runaway
 > ⚠️ EXPERIMENTAL: **Osy** is undergoing rapid architectural evolution, experimental testing, and active refinement:
 > * **Resource Usage & Storage Overhead:** Embedded storage drivers (LanceDB & Sled) currently run directly inside the kernel runtime and can consume significant RAM/I/O under heavy loads. API abstraction layers for external database backends (e.g., remote vector/KV servers) are actively planned for future optimization.
 > * **Architectural Volatility:** Interfaces, memory formats, and IPC contracts are frequently refactored as we experiment with novel prompt-processing techniques and execution pipelines. API stability and production reliability are not guaranteed between commits.
-> * **Solo Project:** This engine is currently developed and maintained by a single engineer. While code quality is strictly prioritized, managing every edge case takes time. Source audits before deployment are strongly recommended.
- 
+
 > 💡 **Contributions Welcome:** If you are passionate about low-level Rust systems, deterministic AI orchestration, or IPC engine design, feel free to open issues, submit pull requests, or reach out!
 
 ---
@@ -42,6 +41,7 @@ Osy utilizes a centralized orchestration model:
 
 ### Ecosystem of Specialized Rust Crates:
 
+* **Rigging:** Asynchronous inline TUI engine for reactive terminal UI (Markdown, syntax highlighting, Vi/Vim keybindings, and dynamic viewports).
 * **AnyLM:** Unified SDK layer for seamless operation across any model provider (OpenAI, Anthropic, Ollama, Local vLLM).
 * **Cistern:** High-level async abstraction built on top of Sled (fast KV store) and LanceDB (embedded vector DB).
 * **Pearce:** Axum-based networking engine with native UDS client and SSE streaming support.
@@ -57,7 +57,7 @@ Memory in Osy is split across several managed layers:
 | Mechanism | Description |
 |---|---|
 | **Auto-Trigger Memory** | The kernel scans incoming context and automatically pulls relevant embeddings from LanceDB before sending the request to the LLM. |
-| **Explicit Model Pull** | The model can initiate memory calls (`search_fact`, `remember_fact`, `forget_fact`) on its own if it lacks sufficient data for an accurate response. |
+| **Explicit Model Pull** | The model can initiate memory calls (`search_fact`, `remember_fact`) on its own if it lacks sufficient data for an accurate response. |
 | **Dynamic System Prompts** | User preferences and global instructions are injected into the session in isolation without bloating the dialogue history. |
 
 ---
@@ -88,20 +88,29 @@ Memory in Osy is split across several managed layers:
 ## Quickstart
 
 ### Requirements
-* **OS:** Unix-like (`Linux`, `macOS`, `BSD`)
+* **OS:** `Linux`, `macOS`, `BSD`, `Windows`
 * **Rust:** `nightly` toolchain
-* **Dependencies:** `jq`
+* **Dependencies:** `jq` (required by `build.sh`)
 
-### Building from Source
+### Clone repository
 
 ```bash
-# Clone repository
 git clone https://github.com/fuderis/osy-kernel.git && cd osy-kernel
+```
 
-# Build project
+### Build from source
+
+Automatically builds and installs Osy CLI on your system.
+
+> For Windows: install `Git Bash` before.
+
+```bash
 bash build.sh
+```
 
-# Run CLI
+### Run Osy CLI
+
+```bash
 osy --help
 ```
 

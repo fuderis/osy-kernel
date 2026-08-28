@@ -22,7 +22,10 @@ impl Runtime {
     }
 
     /// Evaluates JavaScript and returns the result as a string.
+    #[log(skip_all)]
     pub fn eval(&mut self, code: &str) -> Result<String> {
+        info!("Executing JS script code: {:80}...", &code);
+
         let value = self
             .context
             .eval(Source::from_bytes(code))

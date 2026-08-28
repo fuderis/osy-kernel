@@ -1,7 +1,7 @@
 use super::*;
 use crate::prelude::*;
 
-use anylm::api::Message;
+use anylm::api::{Message, Messages};
 use cistern::{Cistern, Kv, RagRecord, generate_id};
 use osy_share::{SessionId, SessionInfo, UserFact, UserRule};
 use std::sync::Arc;
@@ -22,6 +22,20 @@ pub struct Session {
 }
 
 impl Session {
+    /// Helper method to read user session from database
+    #[log(skip_all, fields(sid = %sid))]
+    pub async fn read(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<Messages>>)> {
+        info!("[Session] Reading the user session...");
+
+        let Some(session) = Self::get(&sid).await else {
+            return Err(Error::UnknownSessionId(sid).into());
+        };
+        let db_messages = session.lock().await.read_messages().await?;
+        let messages = arc_mutex!(Messages::from(db_messages));
+
+        Ok((session, messages))
+    }
+
     /// Initializes the user session instance and registers it within `UserState`
     pub async fn init(id: SessionId, info: SessionInfo) -> Result<SharedSession> {
         let uid = id.user_id as u64;

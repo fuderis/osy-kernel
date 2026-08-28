@@ -33,4 +33,4 @@ chrono.workspace = true
 tracing.workspace = true
 clap.workspace = true
 system-utils = { version = "0.1.6", features = ["full"] }
-music-index = "0.1.2"
+music-index = "0.2.0"
