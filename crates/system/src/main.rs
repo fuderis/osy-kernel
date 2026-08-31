@@ -20,48 +20,32 @@ pub mod settings;
 pub mod handlers;
 pub mod skills;
 
-use clap::{Parser, Subcommand};
 use pearce::Server;
 use prelude::*;
-
-#[derive(Parser, Debug)]
-#[command(name = env!("CARGO_PKG_NAME"))]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = env!("CARGO_PKG_DESCRIPTION"))]
-struct Args {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Prints agent metadata in JSON format and exits
-    Metadata,
-    /// Runs the AI agent server
-    Serve,
-}
+use rigging::{Commands, pkg_meta};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     use handlers as hands;
 
-    // Parse CLI arguments
-    let args = Args::parse();
-
     // init settings && logger:
     Settings::init(path!("$config$/config.toml")).await?;
     Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
 
-    // Handle subcommands
-    match args.command {
-        Commands::Metadata => {
-            let metadata = osy_share::agent_metadata!();
-            let json_output = serde_json::to_string(&metadata)?;
-            println!("{json_output}");
-            Ok(())
-        }
-
-        Commands::Serve => {
+    // handle arguments:
+    Commands::new()
+        .meta(pkg_meta!())
+        .cmd(
+            "metadata",
+            "Prints agent metadata in JSON format and exits",
+            |_| async move {
+                let metadata = osy_share::agent_metadata!();
+                let json_output = serde_json::to_string(&metadata)?;
+                println!("{json_output}");
+                Ok(())
+            },
+        )
+        .hide_cmd("serve", "Runs the AI agent server", |_| async move {
             osy_share::macos_protect();
 
             // start server:
@@ -83,6 +67,7 @@ async fn main() -> Result<()> {
                 )
                 .run(sock)
                 .await
-        }
-    }
+        })
+        .run()
+        .await
 }

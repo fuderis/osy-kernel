@@ -44,9 +44,8 @@ async fn handle_query(
     messages: Arc<Mutex<Messages>>,
     message: Message,
     is_control: bool,
-    iteration: usize, // <--- Добавлен параметр для отслеживания глубины рекурсии
+    iteration: usize,
 ) -> Result<()> {
-    // warn!("MESSAGES: {messages:#?}"); // DEBUG
     info!("Processing the user query (iteration {iteration})...");
 
     let settings = Settings::get();
@@ -170,7 +169,7 @@ async fn handle_query(
                 settings
                     .completions
                     .assist_prompt
-                    .replace("{AGENTS_LIST}", &Manager::agents_list_doc().await)
+                    .replace("{AGENTS_LIST}", &Manager::agents_doc().await)
                     .into(),
             ])
             .visibility(Visibility::Internal),
@@ -248,12 +247,12 @@ async fn handle_query(
                         }
                     },
 
-                    "javascript_eval" => match tool_call.parse_args::<skills::eval::EvalAction>() {
+                    "js_eval" => match tool_call.parse_args::<skills::eval::EvalAction>() {
                         Ok(eval) => {
                             evals_list.push((tool_call.id, eval));
                         }
                         Err(e) => {
-                            chunk_error = Some(str!("Failed to parse javascript_eval: {e}").into());
+                            chunk_error = Some(str!("Failed to parse js_eval: {e}").into());
                             break;
                         }
                     },
@@ -297,7 +296,12 @@ async fn handle_query(
                         }
                     }
 
-                    _ => {}
+                    name => {
+                        warn!(
+                            "Unknown tool call `{name}`: {}",
+                            tool_call.parse_args::<JsonValue>().unwrap_or_default()
+                        )
+                    }
                 },
 
                 Err(e) => {
@@ -507,39 +511,32 @@ async fn handle_query(
 }
 
 /// Handles an individual agent task
-#[log(skip_all, fields(agent = %task.agent, skill = %task.skill))]
+#[log(skip_all, fields(skill = %task.skill))]
 pub async fn handle_agent(
     session: Arc<Mutex<Session>>,
     messages: Arc<Mutex<Messages>>,
     tx: Sender<Bytes>,
     task: TaskAction,
 ) -> Result<()> {
-    let agent_name = &task.agent;
     let skill_name = &task.skill;
-    let arc_name = arc!(task.agent.to_string());
+    let Some(agent) = Manager::get_by_skill(skill_name).await else {
+        return Err(str!("Using unknown skill `{}`, aborting...", skill_name).into());
+    };
+    let agent_name = &agent.metadata.name;
+    let Some(skill) = agent.metadata.skills.get(skill_name) else {
+        return Err(str!("Failed to get `{}` skill metadata, aborting...", skill_name).into());
+    };
 
-    // 1. Checking the agent for existence
-    let sock_path = match Manager::ensure_agent(&arc_name).await {
-        Ok(Some(path)) => path,
-        _ => {
-            return Err(str!("Agent `{}` is not available or failed to start", agent_name).into());
-        }
-    };
-    let skill_prompt = match Manager::agent_prompt(&arc_name, &skill_name).await {
-        Some(prompt) => prompt,
-        _ => {
-            return Err(str!("Using unknown skill `{}`, aborting...", skill_name).into());
-        }
-    };
+    let skill_prompt = skill.prompt.trim();
 
     // 2. Getting tools via IPC
-    let client = Client::ipc(&sock_path.to_string_lossy());
+    let client = Client::ipc(&agent.sock_path.to_string_lossy());
     let response = client
         .post(&str!("/skills/{}/tools", task.skill))
         .header("Content-Type", "application/json")
         .send()
         .await
-        .map_err(|e| str!("Failed to get the `{}` agent tools list: {e}", task.agent))?;
+        .map_err(|e| str!("Failed to get the `{}` agent tools list: {e}", agent_name))?;
     let tools = response.json::<Vec<anylm::api::Tool>>().await?;
 
     let log_query = task
@@ -550,7 +547,7 @@ pub async fn handle_agent(
         .trim_end_matches('.')
         .replace('\n', " ");
 
-    let msg = str!("Handling `{agent_name}_{skill_name}` skill: \"{log_query}...\"");
+    let msg = str!("Handling `{agent_name}.{skill_name}` skill: \"{log_query}...\"");
     info!("{msg}");
     tx.send(Event::Thinking(msg)).ok();
 
@@ -566,8 +563,8 @@ pub async fn handle_agent(
         let mut system_content =
             vec![context::system_prompt(&session.lock().await.info, &settings).into()];
 
-        if !skill_prompt.trim().is_empty() {
-            system_content.push(skill_prompt.trim().into());
+        if !skill_prompt.is_empty() {
+            system_content.push(skill_prompt.into());
         }
 
         msgs.add_system(system_content);
@@ -707,8 +704,8 @@ pub async fn handle_agent(
 
         for tool_call in tool_calls {
             let client = client.clone();
-            let sock_path = sock_path.clone();
-            let arc_name = arc_name.clone();
+            let sock_path = agent.sock_path.clone();
+            let agent_name = agent_name.clone();
             let tx = tx.clone();
             let agent_name = agent_name.to_string();
             let skill_name = skill_name.to_string();
@@ -720,7 +717,7 @@ pub async fn handle_agent(
                     let log_json = func.json_str.replace('\n', " ");
 
                     let msg = format!(
-                        "Calling `{agent_name}_{skill_name}.{}` tool: {log_json}",
+                        "Calling `{agent_name}.{skill_name}.{}` tool: {log_json}",
                         func.name
                     );
                     info!("{msg}");
@@ -745,9 +742,9 @@ pub async fn handle_agent(
                             agent_name
                         )))?;
 
-                        let _ = Manager::stop(arc_name.clone()).await;
+                        let _ = Manager::stop(&agent_name).await;
 
-                        if let Ok(Some(_)) = Manager::ensure_agent(&arc_name).await {
+                        if let Ok(Some(_)) = Manager::ensure_agent(&agent_name).await {
                             response = Client::ipc(&sock_path.to_string_lossy())
                                 .post(&request_path)
                                 .header("Content-Type", "application/json")

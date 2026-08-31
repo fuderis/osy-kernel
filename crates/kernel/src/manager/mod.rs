@@ -12,9 +12,9 @@ use tokio::task::JoinSet;
 pub static MANAGER: State<Manager> = State::default();
 
 /// The agents manager
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct Manager {
-    pub agents: HashMap<Arc<String>, Arc<Agent>>,
+    pub agents: Arc<Map<String, Arc<Agent>>>,
     pub agents_doc: Arc<String>,
     pub tools: Arc<Vec<Tool>>,
 }
@@ -79,10 +79,10 @@ impl Manager {
     }
 
     /// Ensures the agent is running and healthy, spawning it if necessary
-    pub async fn ensure_agent(name: &Arc<String>) -> Result<Option<PathBuf>> {
+    pub async fn ensure_agent(name: &String) -> Result<Option<Arc<Agent>>> {
         let needs_start = {
             let guard = MANAGER.get().await;
-            if let Some(agent) = guard.agents.get(name) {
+            if let Some(agent) = guard.agents.read(name).await {
                 agent.check().await.unwrap_or(true)
             } else {
                 true
@@ -98,7 +98,7 @@ impl Manager {
 
             info!("[Manager] Agent `{name}` is missing or unresponsive. Attempting to start...");
 
-            let _ = Self::stop(name.clone()).await;
+            let _ = Self::stop(name).await;
 
             if let Err(e) = Self::run(agent_bin).await {
                 error!("[Manager] Failed to recover agent `{name}`: {e}");
@@ -106,7 +106,7 @@ impl Manager {
             }
         }
 
-        Ok(Self::agent_options(name).await)
+        Ok(Self::get(name).await)
     }
 
     /// Runs the AI agent server
@@ -115,11 +115,11 @@ impl Manager {
         info!("[Manager] Starting agent {:?}...", path.display());
 
         if let Some(agent) = Agent::run(path.clone()).await? {
-            let name = arc!(agent.metadata.name.clone());
-            let mut lock = MANAGER.lock().await;
+            let name = agent.metadata.name.clone();
+            let lock = MANAGER.get().await;
 
-            if !lock.agents.contains_key(&name) {
-                lock.agents.insert(name.clone(), arc!(agent));
+            if !lock.agents.read(&name).await.is_some() {
+                lock.agents.insert(name.clone(), arc!(agent)).await;
                 info!("[Manager] Agent `{name}` added to manager.");
             } else {
                 warn!("[Manager] Agent `{name}` is already running, skipping...");
@@ -131,9 +131,9 @@ impl Manager {
     }
 
     /// Stops the AI agent server
-    pub async fn stop(name: Arc<String>) -> Result<()> {
-        let mut lock = MANAGER.lock().await;
-        if lock.agents.remove(&name).is_some() {
+    pub async fn stop(name: &String) -> Result<()> {
+        let lock = MANAGER.get().await;
+        if lock.agents.remove(name).await.is_some() {
             info!("[Manager] Agent `{name}` stopped and removed.");
         } else {
             warn!("[Manager] Attempted to stop unknown `{name}` agent.");
@@ -151,9 +151,9 @@ impl Manager {
         let mut to_restart = Vec::new();
         {
             let guard = MANAGER.get().await;
-            for (name, agent) in &guard.agents {
-                if agent.check().await? {
-                    to_restart.push(name.clone());
+            for (name, agent) in guard.agents.to_hash().await {
+                if agent.read().await.check().await.unwrap_or(true) {
+                    to_restart.push(name);
                 }
             }
         }
@@ -161,7 +161,7 @@ impl Manager {
         // stop all the outdated agents:
         for name in to_restart {
             warn!("[Manager] Agent `{}` needs update, stopping...", name);
-            Self::stop(name).await?;
+            Self::stop(&name).await?;
         }
 
         Self::init().await?;
@@ -175,19 +175,18 @@ impl Manager {
         let guard = MANAGER.get().await;
 
         // gen message, if agents not found:
-        if guard.agents.is_empty() {
+        if guard.agents.is_empty().await {
             MANAGER.lock().await.agents_doc = arc!("No active skills available.".to_string());
             return Ok(());
         }
 
         // gen skills doc:
         let mut doc_builder = String::from("Available Skills:\n");
-        for agent in guard.agents.values() {
-            for skill in &agent.metadata.skills {
+        for (_, agent) in guard.agents.to_hash().await {
+            for (_, skill) in &agent.read().await.metadata.skills {
                 let _ = writeln!(
                     doc_builder,
-                    "- `{}_{}`: {}",
-                    agent.metadata.name,
+                    "- `{}`: {}",
                     skill.name,
                     skill.description.trim().replace("\n", "")
                 );
@@ -197,29 +196,40 @@ impl Manager {
         MANAGER.lock().await.agents_doc = arc!(doc_builder);
         info!(
             "[Manager] Documentation updated ({} agents processed).",
-            guard.agents.len()
+            guard.agents.len().await
         );
         Ok(())
     }
 
+    /// Returns the agents list prompt part
+    pub async fn agents_doc() -> Arc<String> {
+        MANAGER.get().await.agents_doc.clone()
+    }
+
+    /// Returns the basic tools list
+    pub async fn basic_tools() -> Vec<Tool> {
+        (*MANAGER.get().await.tools).clone()
+    }
+
     /// Returns the all agents list
     pub async fn agents_list() -> Vec<AgentMetadata> {
-        MANAGER
-            .get()
-            .await
-            .agents
-            .iter()
-            .map(|(_, agent)| AgentMetadata {
-                name: agent.metadata.name.clone(),
-                description: agent.metadata.description.clone(),
+        let mut agents = vec![];
+
+        for (_, agent) in MANAGER.get().await.agents.to_hash().await {
+            let guard = agent.read().await;
+            agents.push(AgentMetadata {
+                name: guard.metadata.name.clone(),
+                description: guard.metadata.description.clone(),
                 ..Default::default()
-            })
-            .collect()
+            });
+        }
+
+        agents
     }
 
     /// Returns true if agent with this name is already on running
     pub async fn contains(name: &Arc<String>) -> bool {
-        MANAGER.get().await.agents.contains_key(name)
+        MANAGER.get().await.agents.read(name).await.is_some()
     }
 
     /// Returns true if agent with this name is already on running
@@ -229,55 +239,34 @@ impl Manager {
             .get()
             .await
             .agents
-            .iter()
-            .find(|(_, agent)| &agent.exec_path == path)
+            .find(|_, agent| async move { agent.exec_path == path })
+            .await
             .is_some()
     }
 
-    /// Returns the agents list prompt part
-    pub async fn agents_list_doc() -> Arc<String> {
-        MANAGER.get().await.agents_doc.clone()
-    }
-
-    /// Returns the bsic tools list
-    pub async fn basic_tools() -> Vec<Tool> {
-        (*MANAGER.get().await.tools).clone()
-    }
-
-    /// Returns the agent system prompt
-    pub async fn agent_prompt(name: &Arc<String>, skill: &str) -> Option<String> {
-        MANAGER.get().await.agents.get(name).map(|agent| {
-            agent
-                .metadata
-                .skills
-                .iter()
-                .find(|s| &s.name == skill)
-                .map(|s| s.prompt.clone())
-        })?
-    }
-
-    /// Returns the agent tools list
-    pub async fn agent_tools(name: &Arc<String>, skill: &str) -> Result<Option<Vec<Tool>>> {
-        let mngr = MANAGER.get().await;
-        let Some(agent) = mngr.agents.get(name) else {
-            return Ok(None);
-        };
-
-        let client = Client::ipc(&agent.sock_path.to_string_lossy());
-
-        let request = client.post(&str!("/skills/{skill}/tools"));
-        let tools = request.send().await?.json().await?;
-
-        Ok(Some(tools))
-    }
-
-    /// Returns the agent options (port, prompt, tools)
-    pub async fn agent_options(name: &Arc<String>) -> Option<PathBuf> {
+    /// Returns the agent reference
+    pub async fn get(agent_name: &String) -> Option<Arc<Agent>> {
         MANAGER
             .get()
             .await
             .agents
-            .get(name)
-            .map(|agent| agent.sock_path.clone())
+            .read(agent_name)
+            .await
+            .map(|agent| agent.clone())
+    }
+
+    /// Returns the agent reference
+    pub async fn get_by_skill(skill_name: &str) -> Option<Arc<Agent>> {
+        if let Some((_, agent)) = MANAGER
+            .get()
+            .await
+            .agents
+            .find(|_, agent| async move { agent.metadata.skills.contains_key(skill_name) })
+            .await
+        {
+            Some(Arc::clone(&&agent.read().await))
+        } else {
+            None
+        }
     }
 }

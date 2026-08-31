@@ -27,172 +27,99 @@ pub mod commands;
 pub mod handlers;
 pub mod skills;
 
-use clap::{Parser, Subcommand};
 use manager::Manager;
-use pearce::Server;
 use prelude::*;
 
-pub const APP_NAME: &str = "osy";
-
-/// The CLI commands parser
-#[derive(Parser)]
-#[command(name = env!("CARGO_PKG_NAME"))]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = env!("CARGO_PKG_DESCRIPTION"), long_about = None)]
-struct Cli {
-    /// Load session history on startup when entering interactive chat mode
-    #[arg(short, long)]
-    load: bool,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-/// The CLI commands
-#[derive(Subcommand)]
-enum Commands {
-    /// Check the status of all ecosystem components
-    Status,
-    /// Refresh the server settings & agents list
-    Refresh,
-
-    /// Serve the kernel server
-    #[command(hide = true)]
-    Serve,
-    /// Start the kernel server in the background
-    Start {
-        /// Also run the LM Studio server and load models
-        #[arg(short, long)]
-        lms: bool,
-    },
-    /// Stop the server by killing the port process
-    Stop {
-        /// Also stop the LM Studio server and unload models
-        #[arg(short, long)]
-        lms: bool,
-    },
-    /// Restart the ecosystem (stop -> start)
-    Restart {
-        #[arg(short, long)]
-        lms: bool,
-    },
-
-    /// Enter interactive AI chat mode
-    Chat,
-
-    /// Open settings.toml in the default system editor
-    #[command(alias = "conf")]
-    Config,
-
-    /// Trace live ecosystem log files dynamically
-    Trace {
-        /// Optional User ID filter (also filters session IDs starting with `{uid}-`)
-        #[arg(short, long)]
-        uid: Option<u64>,
-
-        /// Follow mode only: ignore previous lines, stream new logs only
-        #[arg(short, long)]
-        only_new: bool,
-    },
-}
+use rigging::{Commands, Stylize, pkg_meta};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     use commands as cmds;
 
-    // parse arguments:
-    let cli = Cli::parse();
-
     // init settings:
     Settings::init(path!("$config$/settings.toml")).await?;
 
-    if let Err(e) = match cli.command.unwrap_or(Commands::Chat) {
-        //     SYSTEM
-        Commands::Serve => serve().await,
-        Commands::Start { lms } => cmds::server::handle_start(lms).await,
-        Commands::Stop { lms } => cmds::server::handle_stop(lms).await,
-        Commands::Restart { lms } => cmds::server::handle_restart(lms).await,
-
-        //     HEALTH
-        Commands::Status => cmds::health::handle_status().await,
-        Commands::Refresh => cmds::health::handle_refresh().await,
-        Commands::Config => cmds::health::handle_config().await,
-
-        //     CHAT
-        Commands::Chat => cmds::chat::handle_chat(cli.load).await,
-
+    // handle arguments:
+    if let Err(e) = Commands::new()
+        .meta(pkg_meta!())
+        //    SYSTEM
+        .group("server", "Server management commands")
+        .hide_cmd(
+            "server serve",
+            "Serve the kernel server (internal)",
+            |_| async move { cmds::server::handle_serve().await },
+        )
+        .cmd(
+            "server status",
+            "Check the status of kernel server",
+            |_| async move { cmds::server::handle_status().await },
+        )
+        .cmd(
+            "server start -l|--lms=false",
+            "Start the kernel server in the background",
+            |ctx| async move {
+                let start_lms = ctx.get("lms")?;
+                cmds::server::handle_start(start_lms).await
+            },
+        )
+        .cmd(
+            "server stop -l|--lms=false",
+            "Stop the server by killing the port process",
+            |ctx| async move {
+                let stop_lms = ctx.get("lms")?;
+                cmds::server::handle_stop(stop_lms).await
+            },
+        )
+        .cmd(
+            "server restart -l|--lms=false",
+            "Restart the ecosystem (stop -> start)",
+            |ctx| async move {
+                let restart_lms = ctx.get("lms")?;
+                cmds::server::handle_restart(restart_lms).await
+            },
+        )
+        //    HEALTH
+        .cmd(
+            "status",
+            "Check the status of all ecosystem components",
+            |_| async move { cmds::health::handle_status().await },
+        )
+        .cmd(
+            "refresh",
+            "Refresh the server settings & agents list",
+            |_| async move { cmds::health::handle_refresh().await },
+        )
+        .cmd(
+            "config",
+            "Open settings.toml in the default system editor",
+            |_| async move { cmds::health::handle_config().await },
+        )
+        //    CHAT
+        .cmd(
+            "chat -u|--uid=1 -n|--new=false -l|--load=false",
+            "Enter interactive AI chat mode",
+            |ctx| async move {
+                let uid = ctx.get("uid")?;
+                let new_session = ctx.get("new")?;
+                let load_history = ctx.get("load")?;
+                cmds::chat::handle_chat(uid, new_session, load_history).await
+            },
+        )
         //    TRACING
-        Commands::Trace { uid, only_new } => cmds::trace::handle_trace(uid, only_new).await,
-    } {
-        cmds::error(e);
-        std::process::exit(1);
+        .cmd(
+            "trace -u|--uid= -n|--new=true",
+            "Trace live ecosystem log files dynamically",
+            |ctx| async move {
+                let uid = ctx.get_opt::<u64>("uid")?;
+                let only_new = ctx.get("new")?;
+                cmds::trace::handle_trace(uid, only_new).await
+            },
+        )
+        .run()
+        .await
+    {
+        eprintln!("{} {e}", "Error:".red().bold());
     }
-
-    Ok(())
-}
-
-async fn serve() -> Result<()> {
-    use handlers as hands;
-
-    // init logger & agents manager:
-    Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
-    Manager::init().await?;
-
-    // start server:
-    Server::new()
-        //      HEALTH
-        .get("/ping", hands::health::handle_ping)
-        .get("/status", hands::health::handle_status)
-        .get("/refresh", hands::health::handle_refresh)
-        //      USERS
-        .post("/users/{uid}/sessions", hands::users::handle_list)
-        //      USER FACTS (RAG)
-        .post("/users/{uid}/facts/list", hands::users::handle_facts_list)
-        .post("/users/{uid}/facts/set", hands::users::handle_facts_set)
-        .post(
-            "/users/{uid}/facts/remove",
-            hands::users::handle_facts_remove,
-        )
-        .post("/users/{uid}/facts/clear", hands::users::handle_facts_clear)
-        .post(
-            "/users/{uid}/facts/search",
-            hands::users::handle_facts_search,
-        )
-        //      GLOBAL USER RULES
-        .post("/users/{uid}/rules/list", hands::users::handle_rules_list)
-        .post("/users/{uid}/rules/set", hands::users::handle_rules_set)
-        .post(
-            "/users/{uid}/rules/remove",
-            hands::users::handle_rules_remove,
-        )
-        .post("/users/{uid}/rules/clear", hands::users::handle_rules_clear)
-        //      SESSIONS
-        .post("/sessions/{sid}/init", hands::sessions::handle_init)
-        .post("/sessions/{sid}/finish", hands::sessions::handle_finish)
-        .post("/sessions/{sid}/compact", hands::sessions::handle_compact)
-        .post("/sessions/{sid}/clear", hands::sessions::handle_clear)
-        .post("/sessions/{sid}/clone", hands::sessions::handle_clone)
-        //      LOCAL SESSION RULES
-        .post(
-            "/sessions/{sid}/rules/list",
-            hands::sessions::handle_rules_list,
-        )
-        .post(
-            "/sessions/{sid}/rules/set",
-            hands::sessions::handle_rules_set,
-        )
-        .post(
-            "/sessions/{sid}/rules/remove",
-            hands::sessions::handle_rules_remove,
-        )
-        .post(
-            "/sessions/{sid}/rules/clear",
-            hands::sessions::handle_rules_clear,
-        )
-        //      QUERY
-        .post("/sessions/{sid}/query", hands::query::handle_user_query)
-        .run(Settings::get().server.port)
-        .await?;
 
     Ok(())
 }

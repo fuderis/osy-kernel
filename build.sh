@@ -94,7 +94,7 @@ trap cleanup EXIT
 ###############################################################################
 
 if command -v osy >/dev/null 2>&1; then
-    osy stop >/dev/null 2>&1 || true
+    osy server stop >/dev/null 2>&1 || true
 fi
 
 

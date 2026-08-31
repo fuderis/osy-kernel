@@ -52,10 +52,7 @@ pub async fn handle_trace(uid_filter: Option<u64>, only_new: bool) -> Result<()>
             .map(|r| r.agents_list)
             .unwrap_or_default(),
         _ => {
-            println!(
-                "[WARN] Core server is unreachable on port {}. Tracing OSY-CORE logs only.",
-                port
-            );
+            println!("[WARN] Core server is unreachable on port {}.", port);
             vec![]
         }
     };
@@ -88,7 +85,7 @@ pub async fn handle_trace(uid_filter: Option<u64>, only_new: bool) -> Result<()>
     if let Some(uid) = uid_filter {
         let uid_sid_pattern = format!(r"(uid[=:\s]+{0}\b|(?:\b|/){0}-\d+-\d+)", uid);
         regex_patterns.push(uid_sid_pattern);
-        println!("[INFO] Filtering logs by UID/SID: {}", uid);
+        println!("[INFO] Filtering logs by User ID: {}", uid);
     }
 
     let raw_regex_refs: Vec<&str> = regex_patterns.iter().map(|s| s.as_str()).collect();

@@ -16,7 +16,7 @@
 [package]
 name = "osy-system"
 description = "Local system management agent. Provides hardware information, live system metrics, appearance management, power and media control."
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
@@ -24,6 +24,7 @@ osy-share.workspace = true
 tokio.workspace = true
 macron.workspace = true
 atoman.workspace = true
+rigging.workspace = true
 pearce.workspace = true
 anylm.workspace = true
 serde.workspace = true
@@ -31,6 +32,5 @@ serde_json.workspace = true
 regex.workspace = true
 chrono.workspace = true
 tracing.workspace = true
-clap.workspace = true
 system-utils = { version = "0.1.6", features = ["full"] }
 music-index = "0.2.0"

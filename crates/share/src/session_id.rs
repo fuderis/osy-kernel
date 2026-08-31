@@ -8,14 +8,14 @@ use std::{num::ParseIntError, str::FromStr};
 #[derive(Default, Debug, Display, Copy, Clone, Eq, PartialEq, Hash)]
 #[display(fmt = "{user_id}-{timestamp}-{salt}")]
 pub struct SessionId {
-    pub user_id: u128,
+    pub user_id: u64,
     pub timestamp: u128,
     pub salt: u16,
 }
 
 impl SessionId {
     /// Creates a new session ID
-    pub fn new(user_id: u128) -> Self {
+    pub fn new(user_id: u64) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards")
@@ -60,7 +60,7 @@ impl FromStr for SessionId {
         }
 
         let user_id = user_id_str
-            .parse::<u128>()
+            .parse::<u64>()
             .map_err(SessionIdError::InvalidUserId)?;
         let timestamp = timestamp_str
             .parse::<u128>()

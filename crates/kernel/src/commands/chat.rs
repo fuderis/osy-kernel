@@ -4,228 +4,37 @@ use crate::{helpers, prelude::*};
 use anylm::api::{Message, Messages, Role, Visibility};
 use chrono::Local;
 use osy_share::{
-    CompactQuery, Event, HandleQuery, ListQuery, RemoveQuery, SearchQuery, SessionId, SetQuery,
-    UserFact, UserRule,
+    CompactQuery, Event, HandleQuery, ListQuery, RemoveQuery, SearchQuery, SessionId, SessionInfo,
+    SetQuery, UserFact, UserRule,
 };
 use rigging::{
     Stylize,
     style::{Align, BorderStyle, LineStyle, Margin, Padding, SpinnerStyle},
     widgets::{Input, Text},
 };
-use std::{error::Error, process::Command, sync::Arc};
-use tokio::sync::Mutex;
+use std::sync::Arc;
+use tokio::{process::Command, sync::Mutex};
 
 const MIN_WIDTH: usize = 80;
 const INPUT_MAX_HEIGHT: usize = 20;
-const USER_ID: u128 = 0;
 
-/// Handles the interactive CLI chat session lifecycle.
-pub async fn handle_chat(load_history: bool) -> Result<()> {
+/// API: Handles the interactive CLI chat session lifecycle.
+pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Result<()> {
     // initialize base endpoint address and tcp client
     let port = Settings::get().server.port;
     let base_url = str!("http://127.0.0.1:{port}");
     let client = Client::tcp();
 
-    // -----------------------------------------------------------------
-    // 1. Healthcheck & Server Auto-start
-    // -----------------------------------------------------------------
+    // refresh/start the kernel server
+    refresh_server(&client, &base_url).await?;
 
-    // verify whether the backend server is reachable
-    if client
-        .get(&str!("{base_url}/refresh"))
-        .send()
-        .await
-        .is_err()
-    {
-        // attempt to auto-start backend process if offline
-        if Command::new(path!("$")).arg("start").spawn().is_ok() {
-            let ping_url = str!("{base_url}/ping");
-            let mut is_ok = false;
-
-            // poll status endpoint until service responds or times out
-            for _ in 0..10 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                if client.get(&ping_url).send().await.is_ok() {
-                    is_ok = true;
-                    break;
-                }
-            }
-
-            // report timeout if service fails to respond
-            if !is_ok {
-                eprintln!(
-                    "{}: Server started but is not responding.",
-                    "Timeout".red().bold()
-                );
-            }
-        } else {
-            // log process spawning failure
-            eprintln!("{}: Failed to execute server", "Error".red().bold());
-        }
-    }
-
-    // -----------------------------------------------------------------
-    // 2. Session Initialization & History Loading
-    // -----------------------------------------------------------------
-
-    // initialize default fallback session id
-    let mut session_id = SessionId::new(USER_ID);
-    let sessions_url = str!("{base_url}/users/{USER_ID}/sessions");
-    let sessions_query = ListQuery { count: Some(1) };
-
-    // fetch existing active session for current user
-    if let Ok(res) = client
-        .post(&sessions_url)
-        .json(&sessions_query)
-        .send()
-        .await
-    {
-        if let Ok(active_sessions) = res.json::<Vec<SessionId>>().await {
-            if let Some(last_session) = active_sessions.into_iter().next() {
-                session_id = last_session;
-            }
-        }
-    }
-
-    // wrap session id in atomic reference counter and async mutex
-    let session_id = Arc::new(Mutex::new(session_id));
-
-    // capture local environment metadata closure for backend handshake
-    let get_session_info = || {
-        let tz_minutes = (chrono::Local::now().offset().local_minus_utc() / 60) as i16;
-        osy_share::SessionInfo {
-            current_path: std::env::current_dir().ok(),
-            timezone: tz_minutes,
-        }
-    };
-
-    // initialize session on backend and retrieve history payload
-    let current_sid = session_id.lock().await.clone();
-    let init_res = client
-        .post(&str!("{base_url}/sessions/{current_sid}/init"))
-        .json(&get_session_info())
-        .send()
-        .await;
-
-    if let Ok(res) = init_res {
-        if let Ok(history) = res.json::<Messages>().await {
-            // filter messages: retain only public non-tool messages
-            let valid_messages: Vec<&Message> = history
-                .messages
-                .iter()
-                .filter(|msg| msg.visibility == Visibility::Public && !msg.role.is_tool())
-                .collect();
-
-            // load active UI color theme configurations
-            let cfg = Settings::get();
-            let brand_color = cfg.theme.brand_color();
-            let bg_color = cfg.theme.bg_color();
-            let alt_color = cfg.theme.alt_color();
-
-            if load_history {
-                // assemble sequential user and final assistant message pairs
-                let mut pairs: Vec<(&Message, Option<&Message>)> = Vec::new();
-                let mut current_user_msg: Option<&Message> = None;
-                let mut last_assistant_msg: Option<&Message> = None;
-
-                for msg in valid_messages {
-                    match msg.role {
-                        Role::User => {
-                            // save previous user-assistant pair before advancing
-                            if let Some(user) = current_user_msg.take() {
-                                pairs.push((user, last_assistant_msg.take()));
-                            }
-                            current_user_msg = Some(msg);
-                        }
-                        Role::Assistant => {
-                            let text = helpers::extract_text_from_msg(msg).unwrap_or_default();
-                            // bind assistant message only when non-empty textual content exists
-                            if !text.trim().is_empty() {
-                                if current_user_msg.is_some() {
-                                    last_assistant_msg = Some(msg);
-                                } else {
-                                    // handle standalone system/assistant greetings
-                                    pairs.push((msg, None));
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // push final remaining pair to collection
-                if let Some(user) = current_user_msg {
-                    pairs.push((user, last_assistant_msg));
-                }
-
-                // render paired history entries into terminal widgets
-                for (user_or_single_msg, assistant_msg) in pairs {
-                    let user_text =
-                        helpers::extract_text_from_msg(user_or_single_msg).unwrap_or_default();
-
-                    let (user_display_text, asst_display_text) =
-                        match (user_or_single_msg.role.clone(), assistant_msg) {
-                            (Role::User, Some(asst)) => {
-                                let asst_text =
-                                    helpers::extract_text_from_msg(asst).unwrap_or_default();
-                                (user_text.clone(), asst_text)
-                            }
-                            (Role::User, None) => (user_text.clone(), String::new()),
-                            _ => (user_text.clone(), String::new()),
-                        };
-
-                    let timestamp_str = user_or_single_msg
-                        .timestamp
-                        .map(|ts| {
-                            let datetime: chrono::DateTime<Local> = ts.into();
-                            datetime.format("%a %I:%M %p").to_string()
-                        })
-                        .unwrap_or_else(|| Local::now().format("%a %I:%M %p").to_string());
-
-                    Text::new(user_display_text.grey().to_string())
-                        .title(format!(" {timestamp_str} ").with(alt_color), Align::TopLeft)
-                        .min_width(MIN_WIDTH)
-                        .border(BorderStyle::Rounded)
-                        .border_color(alt_color)
-                        .background(bg_color)
-                        .prefix_color(alt_color)
-                        .prefix_line(LineStyle::Solid)
-                        .bullet_color(brand_color)
-                        .code_color(brand_color)
-                        .padding(Padding::hor(1))
-                        .margin(Margin::default().bottom(1))
-                        .handler(async move |handle| {
-                            // Здесь передаем ответ ассистента в хэндлер
-                            if !asst_display_text.is_empty() {
-                                handle.update(asst_display_text);
-                            }
-                        })
-                        .render()
-                        .await?;
-                }
-            } else if !valid_messages.is_empty() {
-                // render notification badge showing loaded history message count
-                let info_msg = format!(
-                    "Loaded {} messages from history.",
-                    (valid_messages.len() / 2).max(1)
-                );
-                Text::new(info_msg.italic().grey().to_string())
-                    .min_width(MIN_WIDTH)
-                    .border(BorderStyle::Rounded)
-                    .border_color(brand_color)
-                    .background(bg_color)
-                    .prefix_color(alt_color)
-                    .padding(Padding::hor(1))
-                    .margin(Margin::default().bottom(1))
-                    .render()
-                    .await?;
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------
-    // 3. Main Interactive Loop
-    // -----------------------------------------------------------------
+    // init user session handling
+    let session_id = arc_mutex!(if new_session {
+        SessionId::new(uid)
+    } else {
+        get_last_sid(&client, &base_url, uid).await
+    });
+    init_session(&client, &base_url, session_id.clone(), load_history).await?;
 
     let run_loop = async {
         loop {
@@ -310,6 +119,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         .min_width(MIN_WIDTH)
                         .border(BorderStyle::Rounded)
                         .border_color(brand_color)
+                        .code_color(brand_color)
                         .background(bg_color)
                         .padding(Padding::hor(1))
                         .margin(Margin::default().bottom(1))
@@ -377,7 +187,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                                 .and_then(|a| a.parse::<usize>().ok())
                                 .or(Some(20));
 
-                            let endpoint = format!("{base_url}/users/{USER_ID}/facts/list");
+                            let endpoint = format!("{base_url}/users/{uid}/facts/list");
                             let res = client
                                 .post(&endpoint)
                                 .json(&ListQuery { count })
@@ -420,7 +230,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                                 continue;
                             }
                             let preview = truncate(&payload, 40);
-                            let endpoint = format!("{base_url}/users/{USER_ID}/facts/set");
+                            let endpoint = format!("{base_url}/users/{uid}/facts/set");
 
                             let msg = match client
                                 .post(&endpoint)
@@ -476,7 +286,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                                 }
                             };
 
-                            let endpoint = format!("{base_url}/users/{USER_ID}/facts/remove");
+                            let endpoint = format!("{base_url}/users/{uid}/facts/remove");
 
                             let msg = match client
                                 .post(&endpoint)
@@ -510,7 +320,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                                 continue;
                             }
 
-                            let endpoint = format!("{base_url}/users/{USER_ID}/facts/search");
+                            let endpoint = format!("{base_url}/users/{uid}/facts/search");
                             let res = client
                                 .post(&endpoint)
                                 .json(&SearchQuery { query: payload })
@@ -575,7 +385,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         }
 
                         "clear" | "purge" => {
-                            let endpoint = format!("{base_url}/users/{USER_ID}/facts/clear");
+                            let endpoint = format!("{base_url}/users/{uid}/facts/clear");
 
                             let msg = match client.post(&endpoint).send().await {
                                 Ok(res) => {
@@ -604,97 +414,6 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         }
                     },
 
-                    // Удобные алиасы
-                    "remember" => {
-                        if payload.is_empty() {
-                            render_msg("Usage: /remember <text>".into()).await?;
-                            continue;
-                        }
-                        let preview = truncate(&payload, 40);
-                        let endpoint = format!("{base_url}/users/{USER_ID}/facts/set");
-
-                        let msg = match client
-                            .post(&endpoint)
-                            .json(&SetQuery {
-                                id: None,
-                                text: payload,
-                            })
-                            .send()
-                            .await
-                        {
-                            Ok(res) => {
-                                let status = res.status();
-                                if status.is_success() {
-                                    match res.json::<UserFact>().await {
-                                        Ok(fact) => format!(
-                                            "Saved to global memory: [{}] {}",
-                                            fact.id,
-                                            truncate(&fact.text, 40)
-                                        ),
-                                        Err(_) => format!("Saved to global memory: {preview}"),
-                                    }
-                                } else {
-                                    let err_body = res.text().await.unwrap_or_default();
-                                    if err_body.trim().is_empty() {
-                                        format!("Server returned status code: {status}")
-                                    } else {
-                                        format!("Error [{status}]: {err_body}")
-                                    }
-                                }
-                            }
-                            Err(e) => format!("Network/Transport error: {e}"),
-                        };
-
-                        render_msg(msg).await?;
-                        continue;
-                    }
-
-                    "forget" => {
-                        let trimmed_payload = payload.trim();
-                        if trimmed_payload.is_empty() {
-                            render_msg("Usage: /forget <id>".into()).await?;
-                            continue;
-                        }
-
-                        let fact_id: u64 = match trimmed_payload.parse() {
-                            Ok(id) => id,
-                            Err(_) => {
-                                render_msg(format!(
-                                    "Invalid ID '{trimmed_payload}'. Must be a numeric u64 ID."
-                                ))
-                                .await?;
-                                continue;
-                            }
-                        };
-
-                        let endpoint = format!("{base_url}/users/{USER_ID}/facts/remove");
-
-                        let msg = match client
-                            .post(&endpoint)
-                            .json(&RemoveQuery { id: fact_id })
-                            .send()
-                            .await
-                        {
-                            Ok(res) => {
-                                let status = res.status();
-                                if status.is_success() {
-                                    format!("Removed fact #{fact_id}")
-                                } else {
-                                    let err_body = res.text().await.unwrap_or_default();
-                                    if err_body.trim().is_empty() {
-                                        format!("Server returned status code: {status}")
-                                    } else {
-                                        format!("Error [{status}]: {err_body}")
-                                    }
-                                }
-                            }
-                            Err(e) => format!("Network/Transport error: {e}"),
-                        };
-
-                        render_msg(msg).await?;
-                        continue;
-                    }
-
                     // --- Memory: Rules ---
                     "rules" | "rule" => match sub_cmd.as_str() {
                         "list" | "ls" => {
@@ -704,7 +423,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                                 .or(Some(20));
 
                             let endpoint = if is_global {
-                                format!("{base_url}/users/{USER_ID}/rules/list")
+                                format!("{base_url}/users/{uid}/rules/list")
                             } else {
                                 format!("{base_url}/sessions/{sid}/rules/list")
                             };
@@ -757,7 +476,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                             }
 
                             let endpoint = if is_global {
-                                format!("{base_url}/users/{USER_ID}/rules/set")
+                                format!("{base_url}/users/{uid}/rules/set")
                             } else {
                                 format!("{base_url}/sessions/{sid}/rules/set")
                             };
@@ -822,7 +541,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                             };
 
                             let endpoint = if is_global {
-                                format!("{base_url}/users/{USER_ID}/rules/remove")
+                                format!("{base_url}/users/{uid}/rules/remove")
                             } else {
                                 format!("{base_url}/sessions/{sid}/rules/remove")
                             };
@@ -857,7 +576,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
 
                         "clear" | "purge" => {
                             let endpoint = if is_global {
-                                format!("{base_url}/users/{USER_ID}/rules/clear")
+                                format!("{base_url}/users/{uid}/rules/clear")
                             } else {
                                 format!("{base_url}/sessions/{sid}/rules/clear")
                             };
@@ -896,7 +615,7 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                     },
 
                     "new" => {
-                        let new_sid = SessionId::new(USER_ID);
+                        let new_sid = SessionId::new(uid);
                         *session_id.lock().await = new_sid.clone();
 
                         let msg = match client
@@ -1066,7 +785,13 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                         continue;
                     }
 
-                    _ => {}
+                    cmd => {
+                        render_msg(str!(
+                            "Unknown command `{cmd}`. Print `/help` to see available commands list."
+                        ))
+                        .await?;
+                        continue;
+                    }
                 }
             }
 
@@ -1133,14 +858,11 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
                 .await?;
         }
 
-        Ok::<(), Box<dyn Error + Send + Sync>>(())
+        Ok::<(), DynError>(())
     };
 
     let res = run_loop.await;
 
-    // -----------------------------------------------------------------
-    // 4. Graceful Shutdown
-    // -----------------------------------------------------------------
     // flush backend state and finalize active chat session cleanly
     info("", "Flushing DB records and closing session cleanly...");
     let final_sid = session_id.lock().await.clone();
@@ -1153,4 +875,218 @@ pub async fn handle_chat(load_history: bool) -> Result<()> {
     }
 
     res
+}
+
+// Capture local environment metadata for backend handshake
+fn get_session_info() -> SessionInfo {
+    let tz_minutes = (chrono::Local::now().offset().local_minus_utc() / 60) as i16;
+    SessionInfo {
+        current_path: std::env::current_dir().ok(),
+        timezone: tz_minutes,
+    }
+}
+
+/// Refreshes/starts the kernel server
+async fn refresh_server(client: &Client, base_url: &str) -> Result<()> {
+    // verify whether the backend server is reachable
+    if client
+        .get(&str!("{base_url}/refresh"))
+        .timeout(Duration::from_millis(500))
+        .send()
+        .await
+        .is_err()
+    {
+        // attempt to auto-start backend process if offline
+        if Command::new(path!("$"))
+            .args(&["server", "start"])
+            .spawn()
+            .is_ok()
+        {
+            let ping_url = str!("{base_url}/ping");
+            let mut is_ok = false;
+
+            // poll status endpoint until service responds or times out
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if client
+                    .get(&ping_url)
+                    .timeout(Duration::from_millis(500))
+                    .send()
+                    .await
+                    .is_ok()
+                {
+                    is_ok = true;
+                    break;
+                }
+            }
+
+            // report timeout if service fails to respond
+            if !is_ok {
+                eprintln!(
+                    "{}: Server started but is not responding.",
+                    "Timeout".red().bold()
+                );
+            }
+        } else {
+            // log process spawning failure
+            eprintln!("{}: Failed to execute server", "Error".red().bold());
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns the active session id
+async fn get_last_sid(client: &Client, base_url: &str, uid: u64) -> SessionId {
+    let sessions_url = str!("{base_url}/users/{uid}/sessions");
+    let sessions_query = ListQuery { count: Some(1) };
+
+    // fetch existing active session for current user
+    if let Ok(res) = client
+        .post(&sessions_url)
+        .json(&sessions_query)
+        .send()
+        .await
+    {
+        if let Ok(active_sessions) = res.json::<Vec<SessionId>>().await {
+            if let Some(last_session) = active_sessions.into_iter().next() {
+                return last_session;
+            }
+        }
+    }
+
+    SessionId::new(uid)
+}
+
+async fn init_session(
+    client: &Client,
+    base_url: &str,
+    sid: Arc<Mutex<SessionId>>,
+    load_history: bool,
+) -> Result<()> {
+    // initialize session on backend and retrieve history payload
+    let current_sid = sid.lock().await.clone();
+    let init_res = client
+        .post(&str!("{base_url}/sessions/{current_sid}/init"))
+        .json(&get_session_info())
+        .send()
+        .await;
+
+    if let Ok(res) = init_res {
+        if let Ok(history) = res.json::<Messages>().await {
+            // filter messages: retain only public non-tool messages
+            let valid_messages: Vec<&Message> = history
+                .messages
+                .iter()
+                .filter(|msg| msg.visibility == Visibility::Public && !msg.role.is_tool())
+                .collect();
+
+            // load active UI color theme configurations
+            let cfg = Settings::get();
+            let brand_color = cfg.theme.brand_color();
+            let bg_color = cfg.theme.bg_color();
+            let alt_color = cfg.theme.alt_color();
+
+            if load_history {
+                // assemble sequential user and final assistant message pairs
+                let mut pairs: Vec<(&Message, Option<&Message>)> = Vec::new();
+                let mut current_user_msg: Option<&Message> = None;
+                let mut last_assistant_msg: Option<&Message> = None;
+
+                for msg in valid_messages {
+                    match msg.role {
+                        Role::User => {
+                            // save previous user-assistant pair before advancing
+                            if let Some(user) = current_user_msg.take() {
+                                pairs.push((user, last_assistant_msg.take()));
+                            }
+                            current_user_msg = Some(msg);
+                        }
+                        Role::Assistant => {
+                            let text = helpers::extract_text_from_msg(msg).unwrap_or_default();
+                            // bind assistant message only when non-empty textual content exists
+                            if !text.trim().is_empty() {
+                                if current_user_msg.is_some() {
+                                    last_assistant_msg = Some(msg);
+                                } else {
+                                    // handle standalone system/assistant greetings
+                                    pairs.push((msg, None));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // push final remaining pair to collection
+                if let Some(user) = current_user_msg {
+                    pairs.push((user, last_assistant_msg));
+                }
+
+                // render paired history entries into terminal widgets
+                for (user_or_single_msg, assistant_msg) in pairs {
+                    let user_text =
+                        helpers::extract_text_from_msg(user_or_single_msg).unwrap_or_default();
+
+                    let (user_display_text, asst_display_text) =
+                        match (user_or_single_msg.role.clone(), assistant_msg) {
+                            (Role::User, Some(asst)) => {
+                                let asst_text =
+                                    helpers::extract_text_from_msg(asst).unwrap_or_default();
+                                (user_text.clone(), asst_text)
+                            }
+                            (Role::User, None) => (user_text.clone(), String::new()),
+                            _ => (user_text.clone(), String::new()),
+                        };
+
+                    let timestamp_str = user_or_single_msg
+                        .timestamp
+                        .map(|ts| {
+                            let datetime: chrono::DateTime<Local> = ts.into();
+                            datetime.format("%a %I:%M %p").to_string()
+                        })
+                        .unwrap_or_else(|| Local::now().format("%a %I:%M %p").to_string());
+
+                    Text::new(user_display_text.grey().to_string())
+                        .title(format!(" {timestamp_str} ").with(alt_color), Align::TopLeft)
+                        .min_width(MIN_WIDTH)
+                        .border(BorderStyle::Rounded)
+                        .border_color(alt_color)
+                        .background(bg_color)
+                        .prefix_color(alt_color)
+                        .prefix_line(LineStyle::Solid)
+                        .bullet_color(brand_color)
+                        .code_color(brand_color)
+                        .padding(Padding::hor(1))
+                        .margin(Margin::default().bottom(1))
+                        .handler(async move |handle| {
+                            // Здесь передаем ответ ассистента в хэндлер
+                            if !asst_display_text.is_empty() {
+                                handle.update(asst_display_text);
+                            }
+                        })
+                        .render()
+                        .await?;
+                }
+            } else if !valid_messages.is_empty() {
+                // render notification badge showing loaded history message count
+                let info_msg = format!(
+                    "Loaded {} messages from history.",
+                    (valid_messages.len() / 2).max(1)
+                );
+                Text::new(info_msg.italic().grey().to_string())
+                    .min_width(MIN_WIDTH)
+                    .border(BorderStyle::Rounded)
+                    .border_color(brand_color)
+                    .background(bg_color)
+                    .prefix_color(alt_color)
+                    .padding(Padding::hor(1))
+                    .margin(Margin::default().bottom(1))
+                    .render()
+                    .await?;
+            }
+        }
+    }
+
+    Ok(())
 }

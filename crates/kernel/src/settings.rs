@@ -1,13 +1,7 @@
-use crate::Result;
 use anylm::{api::ApiKind, options::Options};
-use atoman::{Config, State, StateGuard};
 use macron::str;
 use rigging::Color;
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 
 /// The default system prompt
 const SYSTEM_PROMPT: &'static str = r#"
@@ -111,9 +105,6 @@ Requirements:
 - Omit meta-commentary, introductory text, or explanations about compression.
 "#;
 
-/// The settings instance
-static SETTINGS: State<Config<Settings>> = State::default();
-
 /// Theme color palette settings (for rigging widgets).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThemeOptions {
@@ -126,8 +117,8 @@ pub struct ThemeOptions {
 impl Default for ThemeOptions {
     fn default() -> Self {
         Self {
-            brand_color: (255, 22, 25),
-            alt_color: (226, 226, 226),
+            brand_color: (240, 35, 37),
+            alt_color: (183, 184, 187),
             bg_color: (13, 17, 29),
             blink_color: (20, 26, 42),
         }
@@ -331,6 +322,7 @@ impl ::std::default::Default for CacheOptions {
 }
 
 /// The settings
+#[atoman::config]
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: ThemeOptions,
@@ -350,48 +342,4 @@ pub struct Settings {
     pub context: ContextOptions,
     /// Response caching settings
     pub cache: CacheOptions,
-}
-
-impl Settings {
-    /// Reads & initializes the settings
-    pub async fn init<P>(file_path: P) -> Result<()>
-    where
-        P: AsRef<Path>,
-    {
-        let conf = Config::<Settings>::new(file_path.as_ref()).await?;
-        SETTINGS.set(conf).await;
-        Ok(())
-    }
-
-    /// Returns settings file path
-    pub fn path() -> PathBuf {
-        SETTINGS.dirty_get().path().clone()
-    }
-
-    /// Returns global settings instance
-    pub fn get() -> Arc<Config<Settings>> {
-        SETTINGS.dirty_get()
-    }
-
-    /// Returns settings state guard
-    pub async fn lock() -> StateGuard<Config<Settings>> {
-        SETTINGS.lock().await
-    }
-
-    /// Returns actual settings file data
-    pub async fn read() -> Result<Config<Settings>> {
-        let path = SETTINGS.dirty_get().path().clone();
-        Config::<Settings>::read(path).await
-    }
-
-    /// Reads actual settings from file
-    pub async fn update() -> Result<bool> {
-        let mut cfg = SETTINGS.lock().await;
-
-        if cfg.check(0).await? {
-            cfg.update().await
-        } else {
-            Ok(false)
-        }
-    }
 }
