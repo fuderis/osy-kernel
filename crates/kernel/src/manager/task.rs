@@ -125,7 +125,7 @@ impl Task {
             for id in dependents {
                 if let Some(task) = lock.pending.remove(&id) {
                     let _ = self.tx.send(
-                        Event::error(str!("Cancelled: dependency task {} failed", task.id))
+                        Event::error(format!("Cancelled: dependency task {} failed", task.id))
                             .task_info(self.info()),
                     );
                     to_remove.push(id);

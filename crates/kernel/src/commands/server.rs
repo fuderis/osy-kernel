@@ -1,8 +1,7 @@
-use super::*;
-use crate::{Manager, prelude::*};
+use crate::prelude::*;
 
-use osy_share::{AgentMetadata, StatusData};
-use pearce::Server;
+use osy_share::{AgentMeta, StatusData};
+use rigging::{Stylize, widgets::Print};
 use std::{net::TcpListener, process::Stdio, time::Duration};
 use tokio::{
     process::Command,
@@ -11,119 +10,64 @@ use tokio::{
 
 const TIMEOUT: Duration = Duration::from_millis(500);
 
-/// API: Handles the server launching (inline)
-pub async fn handle_serve() -> Result<()> {
-    use crate::handlers as hands;
-
-    // init logger & agents manager:
-    Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
-    Manager::init().await?;
-
-    // start server:
-    Server::new()
-        //      HEALTH
-        .get("/ping", hands::health::handle_ping)
-        .get("/status", hands::health::handle_status)
-        .get("/refresh", hands::health::handle_refresh)
-        //      USERS
-        .post("/users/{uid}/sessions", hands::users::handle_list)
-        .post("/users/{uid}/facts/list", hands::users::handle_facts_list)
-        .post("/users/{uid}/facts/set", hands::users::handle_facts_set)
-        .post(
-            "/users/{uid}/facts/remove",
-            hands::users::handle_facts_remove,
-        )
-        .post("/users/{uid}/facts/clear", hands::users::handle_facts_clear)
-        .post(
-            "/users/{uid}/facts/search",
-            hands::users::handle_facts_search,
-        )
-        .post("/users/{uid}/rules/list", hands::users::handle_rules_list)
-        .post("/users/{uid}/rules/set", hands::users::handle_rules_set)
-        .post(
-            "/users/{uid}/rules/remove",
-            hands::users::handle_rules_remove,
-        )
-        .post("/users/{uid}/rules/clear", hands::users::handle_rules_clear)
-        //      SESSIONS
-        .post("/sessions/{sid}/init", hands::sessions::handle_init)
-        .post("/sessions/{sid}/finish", hands::sessions::handle_finish)
-        .post("/sessions/{sid}/compact", hands::sessions::handle_compact)
-        .post("/sessions/{sid}/clear", hands::sessions::handle_clear)
-        .post("/sessions/{sid}/clone", hands::sessions::handle_clone)
-        .post(
-            "/sessions/{sid}/rules/list",
-            hands::sessions::handle_rules_list,
-        )
-        .post(
-            "/sessions/{sid}/rules/set",
-            hands::sessions::handle_rules_set,
-        )
-        .post(
-            "/sessions/{sid}/rules/remove",
-            hands::sessions::handle_rules_remove,
-        )
-        .post(
-            "/sessions/{sid}/rules/clear",
-            hands::sessions::handle_rules_clear,
-        )
-        //      QUERY
-        .post("/sessions/{sid}/query", hands::query::handle_user_query)
-        .run(Settings::get().server.port)
-        .await?;
-
-    Ok(())
-}
-
-/// API: Handles the server status checking
+/// API: Handles server status checking.
 pub async fn handle_status() -> Result<()> {
-    let port = Settings::get().server.port;
+    let port = str!(Settings::get().server.port);
     let client = Client::tcp();
 
-    section("Checking Server");
+    Print::h1("Kernel Server:").render().await?;
 
-    // checking server:
-    let res = client
-        .get(&str!("http://127.0.0.1:{port}/status"))
+    // checking server
+    match client
+        .get(&format!("http://127.0.0.1:{port}/status"))
         .send()
-        .await;
-
-    match res {
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
-                info("Status", &str!("Online (port {port})").green().to_string());
+                Print::new()
+                    .field("Status", str!("Online".green()))
+                    .field("Port", str!(port.green()))
+                    .render()
+                    .await?;
 
-                // successful response: we are parsing StatusData.
                 let data: StatusData = response
                     .json()
                     .await
-                    .map_err(|e| str!("Failed to parse response: {e}"))?;
+                    .map_err(|e| Error::Custom(format!("Failed to parse response: {e}")))?;
 
-                info("Agents", "");
+                let mut agents = Print::field("Agents", "");
 
-                if data.agents_list.is_empty() {
-                    warn("No agents loaded");
-                } else {
-                    for AgentMetadata {
+                if !data.agents_list.is_empty() {
+                    for AgentMeta {
                         name, description, ..
                     } in data.agents_list
                     {
-                        item(&name, &description.trim());
+                        agents =
+                            agents.tree_item(format!("{} — {}", name.bold(), description.trim()));
                     }
+
+                    agents.render().await?;
+                } else {
+                    agents.tree_item("No agents loaded.").render().await?;
                 }
             } else {
-                // error 500 or another: read the error text from the body.
                 let err_msg = response
                     .text()
                     .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                    .unwrap_or_else(|_| str!("Failed to read error body"));
 
-                error(format!("Server error ({status}): {err_msg}").into());
+                Print::error(format!("Server error ({status}): {err_msg}"))
+                    .margin_top(1)
+                    .render()
+                    .await?;
             }
         }
         Err(_) => {
-            info("Status", &"Offline".red().to_string());
+            Print::field("Status", str!("Offline".red()))
+                .render()
+                .await?;
         }
     }
 
@@ -131,29 +75,41 @@ pub async fn handle_status() -> Result<()> {
     Ok(())
 }
 
-/// API: Handles the server launching
+/// API: Handles server launching.
 pub async fn handle_start(start_lms: bool) -> Result<()> {
-    section("Starting Services");
+    Print::h1("Starting Server:").render().await?;
 
     let cfg = Settings::get();
 
-    // 1. Start Server
-    let port = cfg.server.port;
-    let is_port_free = TcpListener::bind(str!("127.0.0.1:{port}")).is_ok();
+    // start server
+    let port = str!(cfg.server.port);
+    let is_port_free = TcpListener::bind(format!("127.0.0.1:{port}")).is_ok();
 
     if is_port_free {
         Command::new(path!("$"))
-            .args(&["server", "serve"])
+            .arg("serve")
             .current_dir(path!("$/"))
             .kill_on_drop(false)
             .spawn()?;
-        info("Osy Server", &"Online".green().to_string());
+
+        Print::new()
+            .field("Status", str!("Online".green()))
+            .field("Port", str!(port.green()))
+            .render()
+            .await?;
     } else {
-        warn(&format!("Osy Server: Port {port} is already in use"));
+        Print::warn(format!("Port {port} is already in use..."))
+            .render()
+            .await?;
     }
 
-    // 2. Start LMS Server
+    // start LMS server
     if start_lms {
+        Print::h1("Starting LMS Server:")
+            .margin_top(1)
+            .render()
+            .await?;
+
         let is_running = match timeout(TIMEOUT, Command::new("lms").args(["status"]).output()).await
         {
             Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).contains("ON"),
@@ -170,7 +126,7 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
                 Ok(_child) => {
                     let mut is_ok = false;
 
-                    // 100 tries * 100 ms = 10 seconds to start:
+                    // 100 tries * 100 ms = 10 seconds to start
                     for _ in 0..100 {
                         sleep(Duration::from_millis(100)).await;
 
@@ -186,35 +142,46 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
                     }
 
                     if is_ok {
-                        info("LMS Server", &"Online".green().to_string());
+                        Print::field("Status", str!("Online".green()))
+                            .render()
+                            .await?;
                     } else {
-                        info("LMS Server", &"Failed to start".red().to_string());
+                        Print::warn(str!("LMS server failed to start...".red()))
+                            .render()
+                            .await?;
                     }
                 }
+
                 Err(e) => {
-                    error(format!("Failed to spawn LMS process: {e}").into());
-                    info("LMS Server", &"Failed".red().to_string());
+                    return Err(
+                        Error::Titled("Failed to spawn LMS process".into(), e.into()).into(),
+                    );
                 }
             }
         } else {
-            info("LMS Server", &"Online".green().to_string());
+            Print::field("Status", str!("Online".green()))
+                .render()
+                .await?;
         }
     }
 
-    success("Ready for requests!");
+    Print::success("Ready for requests!")
+        .margin_top(1)
+        .render()
+        .await?;
     println!();
 
     Ok(())
 }
 
-/// API: Handles the server shutdown
+/// API: Handles server shutdown.
 pub async fn handle_stop(stop_lms: bool) -> Result<()> {
-    section("Stopping Services");
+    Print::h1("Stopping Server:").render().await?;
 
     let cfg = Settings::get();
     let port = cfg.server.port;
 
-    // 1. Stop server
+    // stop server
     #[cfg(unix)]
     {
         let _ = Command::new("sh")
@@ -230,17 +197,26 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
         );
         let _ = Command::new("cmd").args(["/C", &cmd]).output().await;
     }
-    info("Osy Server", &"Offline".red().to_string());
 
-    // 2. Stop LMS server
+    Print::field("Status", str!("Offline".red()))
+        .render()
+        .await?;
+
+    // stop LMS server
     if stop_lms {
-        // Unload models first
+        Print::h1("Stopping LMS Server:")
+            .margin_top(1)
+            .render()
+            .await?;
+
+        // unload models first
         let _ = timeout(
             TIMEOUT,
             Command::new("lms").args(["unload", "--all"]).output(),
         )
         .await;
-        info("LMS Models", &"Unloaded".red().to_string());
+
+        let fields = Print::field("Models", str!("Unloaded".red()));
 
         let _ = timeout(
             TIMEOUT,
@@ -252,19 +228,26 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
                 .status(),
         )
         .await;
-        info("LMS Server", &"Offline".red().to_string());
+
+        fields
+            .field("Status", str!("Offline".red()))
+            .render()
+            .await?;
     }
 
-    success("Processes terminated.");
+    Print::success("Processes terminated.")
+        .margin_top(1)
+        .render()
+        .await?;
     println!();
 
     Ok(())
 }
 
-/// API: Handles the server restarting
+/// API: Handles server restarting.
 pub async fn handle_restart(restart_lms: bool) -> Result<()> {
     handle_stop(restart_lms).await?;
-    sleep(Duration::from_millis(800)).await;
+    sleep(Duration::from_millis(500)).await;
     handle_start(restart_lms).await?;
 
     Ok(())

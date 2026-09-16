@@ -1,3 +1,4 @@
+pub mod disk;
 pub mod info;
 pub mod media;
 pub mod power;
@@ -19,18 +20,24 @@ pub fn skills_list() -> Vec<Skill> {
         ),
         Skill::new(
             str!(SkillName::Media),
-            "Audio volume control, media playback (play/pause, stop, next/prev track) and search or play music.",
+            "Media control (volume, play/pause, stop, next/prev track, search/play music).",
             "",
         ),
         Skill::new(
             str!(SkillName::Power),
-            "Shutdown, reboot, suspend and power scheduling.",
+            "Power scheduling (shutdown, suspend, reboot, lock, cancel power action).",
             "",
         ),
         Skill::new(
             str!(SkillName::Theme),
-            "Desktop appearance and theme management.",
+            "Desktop appearance and theme management (set, get).",
             "",
+        ),
+        Skill::new(
+            str!(SkillName::Disk),
+            "Disk management (list, mount, unmount, format).",
+            "Your task is to manage the disks. If they demand something else from you, write a refusal.\n\n\
+            (You can safely run the necessary commands - the user will still receive a prompt for confirmation.)",
         ),
     ]
 }
@@ -44,6 +51,7 @@ pub enum SkillName {
     Media,
     Power,
     Theme,
+    Disk,
 }
 
 impl SkillExt for SkillName {
@@ -53,6 +61,7 @@ impl SkillExt for SkillName {
             Self::Media => media::tools_list(),
             Self::Power => power::tools_list(),
             Self::Theme => theme::tools_list(),
+            Self::Disk => disk::tools_list(),
         }
     }
 
@@ -137,7 +146,16 @@ impl SkillExt for SkillName {
 
             Self::Theme => match tool.as_str() {
                 "set_theme" => theme::handle_set_theme(tx.clone(), from_value(payload)?).await,
-                // TODO: "get_theme" => theme::handle_get_theme(tx.clone(), from_value(payload)?).await,
+                "get_theme" => theme::handle_get_theme(tx.clone(), from_value(payload)?).await,
+                _ => Err(Error::UnknownTool(tool).into()),
+            },
+
+            Self::Disk => match tool.as_str() {
+                "disk_list" => disk::handle_list(tx.clone(), from_value(payload)?).await,
+                "disk_mount" => disk::handle_mount(tx.clone(), from_value(payload)?).await,
+                "disk_unmount" => disk::handle_unmount(tx.clone(), from_value(payload)?).await,
+                "disk_repair" => disk::handle_repair(tx.clone(), from_value(payload)?).await,
+                "disk_format" => disk::handle_format(tx.clone(), from_value(payload)?).await,
                 _ => Err(Error::UnknownTool(tool).into()),
             },
         }

@@ -14,11 +14,11 @@ pub fn tools_list() -> Vec<Tool> {
         .required_property(
             "mode",
             Schema::string("Power action to perform.").variants(set![
-                str!("shutdown"),
-                str!("reboot"),
-                str!("suspend"),
-                str!("lock"),
-                str!("logout"),
+                "shutdown".into(),
+                "reboot".into(),
+                "suspend".into(),
+                "lock".into(),
+                "logout".into(),
             ]),
         )
         .optional_property(
@@ -61,29 +61,29 @@ pub async fn handle_schedule_power(tx: Sender<Bytes>, action: PowerAction) -> Re
 
     match PowerManager::schedule(action.mode, action.timestamp).await {
         Ok(_) => {
-            let msg = str!(
+            let msg = format!(
                 "Scheduled power action: {mode}. Execution time: {local}.",
                 mode = action.mode
             );
 
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
 
-        Err(e) => Err(str!("Power operation failed: {e}").into()),
+        Err(e) => Err(format!("Power operation failed: {e}").into()),
     }
 }
 
 #[log(skip_all)]
 pub async fn handle_cancel_power(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let msg = match PowerManager::cancel().await {
-        Some(mode) => str!("Scheduled power action canceled. Canceled action: {mode}."),
-        None => str!("There is no scheduled power action."),
+        Some(mode) => format!("Scheduled power action canceled. Canceled action: {mode}."),
+        None => "There is no scheduled power action.".into(),
     };
 
     info!("{msg}");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
     Ok(())
 }
 
@@ -91,7 +91,7 @@ pub async fn handle_cancel_power(tx: Sender<Bytes>, _payload: JsonValue) -> Resu
 pub async fn handle_power_status(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     let msg = match PowerManager::status().await {
         Some(task) => {
-            str!(
+            format!(
                 "Scheduled {mode}. Execution time: {local}",
                 mode = task.mode,
                 local = task
@@ -101,10 +101,10 @@ pub async fn handle_power_status(tx: Sender<Bytes>, _payload: JsonValue) -> Resu
             )
         }
 
-        None => str!("No power action is currently scheduled."),
+        None => "No power action is currently scheduled.".into(),
     };
 
     info!("{msg}");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
     Ok(())
 }

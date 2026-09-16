@@ -1,30 +1,33 @@
+//! Agents management module.
+
 pub mod agent;
 pub use agent::Agent;
 
 use crate::{prelude::*, skills};
 
 use anylm::api::Tool;
-use osy_share::AgentMetadata;
+use osy_share::AgentMeta;
 use std::fmt::Write;
 use tokio::task::JoinSet;
 
-/// The agents manager state
+/// Agents manager state.
 pub static MANAGER: State<Manager> = State::default();
 
-/// The agents manager
+/// Agents manager.
 #[derive(Default, Clone)]
 pub struct Manager {
-    pub agents: Arc<Map<String, Arc<Agent>>>,
+    pub agents: Arc<SharedMap<String, Agent>>,
     pub agents_doc: Arc<String>,
     pub tools: Arc<Vec<Tool>>,
 }
 
 impl Manager {
-    /// Initializes & runs the agents management
+    /// Initializes & runs the agents management.
+    #[log(skip_all)]
     pub async fn init() -> Result<()> {
         let scan_dir = path!("$/");
 
-        // check scan dir:
+        // check scan dir
         if !scan_dir.exists() {
             warn!("[Manager] Core directory not found at: {scan_dir:?}.");
             return Ok(());
@@ -35,7 +38,7 @@ impl Manager {
 
         info!("[Manager] Scanning for agent binaries...");
 
-        // read files in core dir:
+        // read files in core dir
         while let Some(entry) = reader.next_file().await? {
             let path = entry.path().clone();
             let file_name = path
@@ -44,27 +47,27 @@ impl Manager {
                 .to_string_lossy()
                 .to_string();
 
-            // check if it's an agent binary (starts with "osy-")
-            if file_name.starts_with("osy-") && !Self::contains_path(&path).await {
+            // check if it's an agent binary
+            if file_name.starts_with("osy-") && !Self::has_agent_path(&path).await {
                 // spawn agent running:
-                set.spawn(async move { Self::run(path).await });
+                set.spawn(async move { Agent::run(path).await });
             }
         }
 
-        // check results:
+        // check results
         while let Some(task_res) = set.join_next().await {
             if let Err(e) = task_res {
                 error!("[Manager] Agent startup task panicked: {e}");
             }
         }
 
-        // gen task delegation tool:
+        // gen task delegation tool
         Self::gen_basic_tools().await;
 
         Ok(())
     }
 
-    /// Generates & sets the basic tools schemes
+    /// Generates & sets the basic tools schemes.
     pub async fn gen_basic_tools() {
         let tools = vec![
             skills::eval::tools_list(),
@@ -78,90 +81,29 @@ impl Manager {
         MANAGER.lock().await.tools = arc!(tools);
     }
 
-    /// Ensures the agent is running and healthy, spawning it if necessary
-    pub async fn ensure_agent(name: &String) -> Result<Option<Arc<Agent>>> {
-        let needs_start = {
-            let guard = MANAGER.get().await;
-            if let Some(agent) = guard.agents.read(name).await {
-                agent.check().await.unwrap_or(true)
-            } else {
-                true
-            }
-        };
-
-        if needs_start {
-            let agent_bin = path!("$/").join(&str!("osy-{}", name.as_str()));
-            if !agent_bin.exists() {
-                warn!("[Manager] Agent `{name}` requested but binary not found at {agent_bin:?}.");
-                return Ok(None);
-            }
-
-            info!("[Manager] Agent `{name}` is missing or unresponsive. Attempting to start...");
-
-            let _ = Self::stop(name).await;
-
-            if let Err(e) = Self::run(agent_bin).await {
-                error!("[Manager] Failed to recover agent `{name}`: {e}");
-                return Ok(None);
-            }
-        }
-
-        Ok(Self::get(name).await)
-    }
-
-    /// Runs the AI agent server
-    pub async fn run(bin_path: impl Into<PathBuf>) -> Result<()> {
-        let path: PathBuf = bin_path.into();
-        info!("[Manager] Starting agent {:?}...", path.display());
-
-        if let Some(agent) = Agent::run(path.clone()).await? {
-            let name = agent.metadata.name.clone();
-            let lock = MANAGER.get().await;
-
-            if !lock.agents.read(&name).await.is_some() {
-                lock.agents.insert(name.clone(), arc!(agent)).await;
-                info!("[Manager] Agent `{name}` added to manager.");
-            } else {
-                warn!("[Manager] Agent `{name}` is already running, skipping...");
-            }
-        }
-
-        Self::update_doc().await?;
-        Ok(())
-    }
-
-    /// Stops the AI agent server
-    pub async fn stop(name: &String) -> Result<()> {
-        let lock = MANAGER.get().await;
-        if lock.agents.remove(name).await.is_some() {
-            info!("[Manager] Agent `{name}` stopped and removed.");
-        } else {
-            warn!("[Manager] Attempted to stop unknown `{name}` agent.");
-        }
-
-        Self::update_doc().await?;
-        Ok(())
-    }
-
-    /// Updates the AI agents list
+    /// Checks & updates agents list.
+    #[log(skip_all)]
     pub async fn update() -> Result<()> {
         info!("[Manager] Starting agents update cycle...");
 
         // collect the list of all the outdated agents:
         let mut to_restart = Vec::new();
         {
-            let guard = MANAGER.get().await;
-            for (name, agent) in guard.agents.to_hash().await {
-                if agent.read().await.check().await.unwrap_or(true) {
-                    to_restart.push(name);
+            let guard = MANAGER.get();
+            for (_name, agent) in guard.agents.to_hash().await {
+                if agent.read().await.check(true).await.unwrap_or(true) {
+                    to_restart.push(agent);
                 }
             }
         }
 
         // stop all the outdated agents:
-        for name in to_restart {
-            warn!("[Manager] Agent `{}` needs update, stopping...", name);
-            Self::stop(&name).await?;
+        for agent in to_restart {
+            let agent = agent.read().await;
+            let name = &agent.metadata.name;
+
+            warn!("[Manager] Agent `{name}` is outdated...");
+            agent.stop().await?;
         }
 
         Self::init().await?;
@@ -170,14 +112,14 @@ impl Manager {
         Ok(())
     }
 
-    /// Updates the agents list prompt part
-    pub async fn update_doc() -> Result<()> {
-        let guard = MANAGER.get().await;
+    /// Generates agents documentation.
+    pub(super) async fn gen_doc() {
+        let guard = MANAGER.get();
 
-        // gen message, if agents not found:
+        // gen message, if agents not found
         if guard.agents.is_empty().await {
             MANAGER.lock().await.agents_doc = arc!("No active skills available.".to_string());
-            return Ok(());
+            return;
         }
 
         // gen skills doc:
@@ -186,7 +128,7 @@ impl Manager {
             for (_, skill) in &agent.read().await.metadata.skills {
                 let _ = writeln!(
                     doc_builder,
-                    "- `{}`: {}",
+                    "* `{}`: {}",
                     skill.name,
                     skill.description.trim().replace("\n", "")
                 );
@@ -196,28 +138,27 @@ impl Manager {
         MANAGER.lock().await.agents_doc = arc!(doc_builder);
         info!(
             "[Manager] Documentation updated ({} agents processed).",
-            guard.agents.len().await
+            guard.agents.count().await
         );
-        Ok(())
     }
 
-    /// Returns the agents list prompt part
+    /// Returns agents documentation for prompt.
     pub async fn agents_doc() -> Arc<String> {
-        MANAGER.get().await.agents_doc.clone()
+        MANAGER.get().agents_doc.clone()
     }
 
-    /// Returns the basic tools list
+    /// Returns basic tools list.
     pub async fn basic_tools() -> Vec<Tool> {
-        (*MANAGER.get().await.tools).clone()
+        (*MANAGER.get().tools).clone()
     }
 
-    /// Returns the all agents list
-    pub async fn agents_list() -> Vec<AgentMetadata> {
+    /// Returns agents list.
+    pub async fn agents_list() -> Vec<AgentMeta> {
         let mut agents = vec![];
 
-        for (_, agent) in MANAGER.get().await.agents.to_hash().await {
+        for (_, agent) in MANAGER.get().agents.to_hash().await {
             let guard = agent.read().await;
-            agents.push(AgentMetadata {
+            agents.push(AgentMeta {
                 name: guard.metadata.name.clone(),
                 description: guard.metadata.description.clone(),
                 ..Default::default()
@@ -227,44 +168,41 @@ impl Manager {
         agents
     }
 
-    /// Returns true if agent with this name is already on running
-    pub async fn contains(name: &Arc<String>) -> bool {
-        MANAGER.get().await.agents.read(name).await.is_some()
+    /// Returns true if agent with this name on running.
+    pub async fn has_agent(name: &Arc<String>) -> bool {
+        MANAGER.get().agents.read(name).await.is_some()
     }
 
-    /// Returns true if agent with this name is already on running
-    pub async fn contains_path(path: impl AsRef<Path>) -> bool {
+    /// Returns true if agent with this path on running.
+    pub async fn has_agent_path(path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
         MANAGER
             .get()
-            .await
             .agents
             .find(|_, agent| async move { agent.exec_path == path })
             .await
             .is_some()
     }
 
-    /// Returns the agent reference
-    pub async fn get(agent_name: &String) -> Option<Arc<Agent>> {
+    /// Returns agent reference by name.
+    pub async fn get_agent(name: &String) -> Option<SharedItem<Agent>> {
         MANAGER
             .get()
-            .await
             .agents
-            .read(agent_name)
+            .get(name)
             .await
             .map(|agent| agent.clone())
     }
 
-    /// Returns the agent reference
-    pub async fn get_by_skill(skill_name: &str) -> Option<Arc<Agent>> {
+    /// Returns agent reference by skill name.
+    pub async fn get_by_skill(skill: &str) -> Option<SharedItem<Agent>> {
         if let Some((_, agent)) = MANAGER
             .get()
-            .await
             .agents
-            .find(|_, agent| async move { agent.metadata.skills.contains_key(skill_name) })
+            .find(|_, agent| async move { agent.metadata.skills.contains_key(skill) })
             .await
         {
-            Some(Arc::clone(&&agent.read().await))
+            Some(agent.clone())
         } else {
             None
         }

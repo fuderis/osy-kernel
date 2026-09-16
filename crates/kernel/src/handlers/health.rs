@@ -14,14 +14,14 @@ pub async fn handle_status() -> Response {
 
 /// Refreshes the server settings & agents list
 pub async fn handle_refresh() -> Response {
-    // update settings:
+    // update settings
     if let Err(e) = Settings::update().await {
-        return Response::error().text(str!("{e}"));
+        return Response::error().text(e.to_string());
     }
 
-    // update agents:
+    // update agents
     if let Err(e) = Manager::update().await {
-        return Response::error().text(str!("{e}"));
+        return Response::error().text(e.to_string());
     }
 
     let agents_list = Manager::agents_list().await;

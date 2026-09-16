@@ -14,11 +14,9 @@
 
 Modern agentic frameworks often suffer from uncontrolled agent autonomy, runaway token usage, and context leaks. Osy solves these issues at a deep system level: agents are isolated at the process level, system calls are purged from dialogue history, and memory operates in a hybrid mode.
 
-> ⚠️ EXPERIMENTAL: **Osy** is undergoing rapid architectural evolution, experimental testing, and active refinement:
+> ⚠️ **EXPERIMENTAL:** **Osy** is undergoing rapid architectural evolution, experimental testing, and active refinement:
 > * **Resource Usage & Storage Overhead:** Embedded storage drivers (LanceDB & Sled) currently run directly inside the kernel runtime and can consume significant RAM/I/O under heavy loads. API abstraction layers for external database backends (e.g., remote vector/KV servers) are actively planned for future optimization.
 > * **Architectural Volatility:** Interfaces, memory formats, and IPC contracts are frequently refactored as we experiment with novel prompt-processing techniques and execution pipelines. API stability and production reliability are not guaranteed between commits.
-
-> 💡 **Contributions Welcome:** If you are passionate about low-level Rust systems, deterministic AI orchestration, or IPC engine design, feel free to open issues, submit pull requests, or reach out!
 
 ---
 
@@ -77,20 +75,21 @@ Memory in Osy is split across several managed layers:
 
 ## Roadmap
 
-* [x] Long-Term Memory (RAG + Fact Storage)
-* [x] Task-Scoped Context & Token Scrubbing
-* [x] Native Process Lifecycle & UDS IPC
-* [x] Embedded JS Engine (Boa Runtime for Isolated Computations)
-* [ ] Native Web Search (Obscure integration)
+* [x] Long-Term Memory (RAG + Fact Storage).
+* [x] Task-Scoped Context & Token Scrubbing.
+* [x] Native Process Lifecycle & UDS IPC.
+* [x] Embedded JS Engine (Boa Runtime for Isolated Computations).
+* [x] Interactive Events with Callback (Confirmation Prompt, Select Menu, etc.).
+* [ ] Native Web Search (Obscure integration).
 
 ---
 
 ## Quickstart
 
 ### Requirements
-* **OS:** `Linux`, `macOS`, `BSD`, `Windows`
-* **Rust:** `nightly` toolchain
-* **Dependencies:** `jq` (required by `build.sh`)
+* **OS:** `Linux`, `macOS`, `BSD`, `Windows`.
+* **Rust:** `nightly` toolchain.
+* **Dependencies:** `jq` (required by `build.sh`).
 
 ### Clone repository
 
@@ -113,6 +112,11 @@ bash build.sh
 ```bash
 osy --help
 ```
+
+---
+
+> 💡 **Contributions Welcome:** If you are passionate about low-level Rust systems, deterministic AI orchestration,
+or IPC engine design, feel free to open issues, submit pull requests, or reach out!
 
 ---
 

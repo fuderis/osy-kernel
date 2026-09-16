@@ -1,5 +1,5 @@
 use anylm::api::Tool;
-use pearce::{Bytes, Sender};
+use pearce::stream::{Bytes, Sender};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 

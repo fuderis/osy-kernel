@@ -1,6 +1,7 @@
-use crate::prelude::*;
+use crate::{prelude::*, runtime::Runtime};
 use anylm::api::{Schema, Tool};
 
+/// Returns tools list.
 pub fn tools_list() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -18,9 +19,19 @@ pub fn tools_list() -> Vec<Tool> {
     ]
 }
 
+/// JavaScript evaluation data.
 #[derive(Deserialize)]
 pub struct EvalAction {
-    pub task_id: Option<i64>,
-    pub parameter: Option<String>,
+    /// Execution code (JavaScript).
     pub code: String,
+}
+
+/// Handles JavaScript execution.
+#[log(skip_all)]
+pub async fn handle_eval(action: EvalAction) -> Result<String> {
+    info!("Executing JavaScript code: {:80}...", &action.code);
+
+    Runtime::new()
+        .eval(&action.code)
+        .map_err(|e| Error::Titled("JavaScript execution error".into(), e).into())
 }

@@ -33,4 +33,6 @@ pub struct RemoveQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub query: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }

@@ -3,19 +3,39 @@ use crate::prelude::*;
 use anylm::{
     api::{Messages, Schema},
     completions::{Chunk, Completions},
+    embeddings::{EmbeddingSearch, Embeddings},
 };
 
-/// Normalizes the user fact
+/// Generates the text embeddings.
+pub async fn generate_embedding(text: &str, search: EmbeddingSearch) -> Result<Vec<f32>> {
+    let ai_ops = Settings::get().embeddings.options.clone();
+
+    let embeddings = Embeddings::try_from(ai_ops)?
+        .input(text)
+        .search(search)
+        .send()
+        .await?;
+
+    let first = embeddings
+        .data
+        .into_iter()
+        .next()
+        .ok_or(Error::NoEmbeddingReceived)?;
+
+    Ok(first.embedding)
+}
+
+/// Normalizes user fact text.
 pub async fn normalize_fact_text(raw_text: &str) -> String {
-    let settings = Settings::get();
+    let ops = &Settings::get().completions;
 
     let messages = Messages::new()
-        .system(vec![settings.completions.normalize_prompt.clone().into()])
+        .system(vec![ops.normalize_prompt.clone().into()])
         .user(vec![raw_text.into()])
         .wrap();
 
     let res = async {
-        let mut response = Completions::try_from(settings.completions.options.clone())?
+        let mut response = Completions::try_from(ops.options.clone())?
             .schema(
                 Schema::object("Normalized fact search structure").required_property(
                     "search_text",
@@ -51,17 +71,27 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
     }
 }
 
-/// Translates text into English
-pub async fn translate_into_english(text: &str) -> Result<String> {
-    let settings = Settings::get();
-    let messages = Messages::new()
-            .system(vec![
-                "You are a translator. Translate the given user search query to English for semantic vector search.".into(),
-            ])
-            .user(vec![text.into()])
-            .wrap();
+/// Translates text to English.
+pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String> {
+    let ops = &Settings::get().completions;
 
-    let mut response = Completions::try_from(settings.completions.options.clone())?
+    let messages = Messages::new()
+        .system(vec![
+            format!(
+                "{}{}",
+                ops.translate_prompt.trim(),
+                if vec_search {
+                    "Optimize for semantic vector search."
+                } else {
+                    ""
+                }
+            )
+            .into(),
+        ])
+        .user(vec![text.into()])
+        .wrap();
+
+    let mut response = Completions::try_from(ops.options.clone())?
         .schema(
             Schema::object("Search query translation structure").required_property(
                 "translated_text",
@@ -85,5 +115,5 @@ pub async fn translate_into_english(text: &str) -> Result<String> {
 
     Ok(serde_json::from_str::<TranslatedQuery>(&json_str)
         .map(|parsed| parsed.translated_text)
-        .map_err(|e| format!("Failed to parse translated query JSON: {e}"))?)
+        .map_err(|e| Error::Titled("Failed to parse translated query JSON".into(), e.into()))?)
 }

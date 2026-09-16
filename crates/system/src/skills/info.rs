@@ -33,7 +33,7 @@ pub async fn handle_system_info(tx: Sender<Bytes>, _payload: JsonValue) -> Resul
     let info = SYSTEM_MONITOR.lock().await.info();
     let msg = str!(info);
 
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
     Ok(())
 }
 
@@ -46,7 +46,7 @@ pub async fn handle_system_metrics(tx: Sender<Bytes>, _payload: JsonValue) -> Re
     let msg = str!(metrics);
 
     info!("System metrics collected.");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
     Ok(())
 }
 
@@ -59,6 +59,6 @@ pub async fn handle_devices_list(tx: Sender<Bytes>, _payload: JsonValue) -> Resu
     let msg = str!(devices);
 
     info!("Connected devices enumerated.");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
     Ok(())
 }

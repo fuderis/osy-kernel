@@ -20,54 +20,59 @@ pub mod settings;
 pub mod handlers;
 pub mod skills;
 
+use osy_share::AgentMeta;
 use pearce::Server;
 use prelude::*;
-use rigging::{Commands, pkg_meta};
+use rigging::{CommandContext, Commands, pkg_meta};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    use handlers as hands;
+    osy_share::macos_protection!();
 
-    // init settings && logger:
+    // init agent metadata
+    AgentMeta::init(pkg_meta!(), skills::skills_list()).await;
+
+    // init settings && logger
     Settings::init(path!("$config$/config.toml")).await?;
     Logger::init(path!("$state$/logs"), Settings::get().server.max_logs).await?;
 
-    // handle arguments:
+    // handle arguments
     Commands::new()
         .meta(pkg_meta!())
+        .hide_cmd("serve", "Runs the agent server", serve)
         .cmd(
             "metadata",
             "Prints agent metadata in JSON format and exits",
             |_| async move {
-                let metadata = osy_share::agent_metadata!();
-                let json_output = serde_json::to_string(&metadata)?;
-                println!("{json_output}");
+                println!("{}", AgentMeta::get().to_json_string());
                 Ok(())
             },
         )
-        .hide_cmd("serve", "Runs the AI agent server", |_| async move {
-            osy_share::macos_protect();
-
-            // start server:
-            let sock = path!(
-                "$temp/osy/socks/{}.sock",
-                env!("CARGO_PKG_NAME").trim_start_matches("osy-")
-            );
-
-            info!("Launching on `{}`...", sock.display());
-            Server::new()
-                //    HEALTH
-                .get("/ping", hands::health::handle_ping)
-                //    SKILLS
-                .post("/skills/list", hands::skills::handle_skills_list)
-                .post("/skills/{skill}/tools", hands::skills::handle_tools_list)
-                .post(
-                    "/skills/{skill}/call/{tool}",
-                    hands::skills::handle_tool_call,
-                )
-                .run(sock)
-                .await
-        })
         .run()
+        .await
+}
+
+async fn serve(_: CommandContext) -> Result<()> {
+    use handlers as hands;
+
+    let (sock_name, sock_path) = {
+        let meta = AgentMeta::get();
+        (meta.sock_name.clone(), meta.sock_path.clone())
+    };
+
+    // start server:
+    info!("Launching on `{}`...", sock_path.display());
+    Server::new()
+        //    HEALTH
+        .get("/ping", hands::health::handle_ping)
+        //    SKILLS
+        .post("/skills/list", hands::skills::handle_skills_list)
+        .post("/skills/{skill}/tools", hands::skills::handle_tools_list)
+        .post(
+            "/skills/{skill}/call/{tool}",
+            hands::skills::handle_tool_call,
+        )
+        .callback(true)
+        .run(sock_name)
         .await
 }

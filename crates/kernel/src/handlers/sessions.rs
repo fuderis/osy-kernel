@@ -18,35 +18,25 @@ pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) 
             info!("Found existing session in memory");
             existing
         }
-        None => {
-            info!("Session not found in memory, initializing new Session::init...");
-            match Session::init(sid, session_info).await {
-                Ok(s) => {
-                    info!("Session::init succeeded");
-                    s
-                }
-                Err(e) => {
-                    error!("Failed to init session {sid}: {e}");
-                    return Response::error().text(e.to_string());
-                }
+        None => match Session::init(sid, session_info).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to init session {sid}: {e}");
+                return Response::error().text(e.to_string());
             }
-        }
+        },
     };
 
-    info!("Waiting for session_shared lock...");
+    info!("Waiting for session lock...");
     let read_result = {
         let session = session_shared.lock().await;
-        info!("Acquired session_shared lock. Reading messages...");
         let res = session.read_messages().await;
-        info!("Messages read. Releasing session_shared lock...");
+        info!("Messages read. Releasing session lock...");
         res
     };
 
     match read_result {
-        Ok(messages) => {
-            info!("Successfully finished handle_init");
-            Response::ok().json(&messages)
-        }
+        Ok(messages) => Response::ok().json(&messages),
         Err(e) => {
             error!("Failed to read messages for session {sid}: {e}");
             Response::error().text(e.to_string())
@@ -57,12 +47,8 @@ pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) 
 /// API: Finishes the user session and flushes DB to prevent lock contention
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_finish(Paths(sid): Paths<SessionId>) -> Response {
-    info!("Attempting Session::finish...");
     match Session::finish(&sid).await {
-        Ok(_) => {
-            info!("Session finished successfully");
-            Response::ok().text("Session finished successfully")
-        }
+        Ok(_) => Response::ok().text("Session finished successfully"),
         Err(e) => {
             error!("Failed to finish session {sid}: {e}");
             Response::error().text(e.to_string())
@@ -82,26 +68,24 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
             let preserve_count = preserve.unwrap_or(cfg.execution.preserve_messages);
             info!("Starting stream (preserve: {preserve_count})");
 
-            info!("Looking up Session::get...");
             let Some(session_shared) = Session::get(&sid).await else {
                 let err_msg = format!("Undefined session id `{sid}`");
                 error!("{err_msg}");
-                tx.send(Event::error(err_msg)).ok();
+                tx.send(Event::Error(err_msg)).ok();
                 return;
             };
 
-            info!("Waiting for session_shared lock to read messages...");
+            info!("Waiting for session lock to read messages...");
             let db_messages = {
                 let session = session_shared.lock().await;
-                info!("Acquired session_shared lock. Reading messages...");
                 let msgs_res = session.read_messages().await;
-                info!("Messages read. Releasing session_shared lock...");
+                info!("Messages read. Releasing session lock...");
 
                 match msgs_res {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         error!("Failed to read messages for compression: {e}");
-                        tx.send(Event::error(e.to_string())).ok();
+                        tx.send(Event::Error(e.to_string())).ok();
                         return;
                     }
                 }
@@ -111,7 +95,7 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
             info!("Total messages read: {compress_count}");
             if compress_count == 0 {
                 warn!("Nothing to compress, skip");
-                tx.send(Event::finish()).ok();
+                tx.send(Event::Finish).ok();
                 return;
             }
 
@@ -137,13 +121,13 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
                     }
                     Err(e) => {
                         error!("Failed to send compression request to LLM: {e}");
-                        tx.send(Event::error(e.to_string())).ok();
+                        tx.send(Event::Error(e.to_string())).ok();
                         return;
                     }
                 },
                 Err(e) => {
                     error!("Failed to prepare LLM completions config: {e}");
-                    tx.send(Event::error(e.to_string())).ok();
+                    tx.send(Event::Error(e.to_string())).ok();
                     return;
                 }
             };
@@ -154,7 +138,7 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
             while let Some(chunk) = response.next().await {
                 match chunk {
                     Ok(Chunk::Text(text_part)) => {
-                        if tx.send(Event::answer(text_part.clone())).is_err() {
+                        if tx.send(Event::Answer(text_part.clone())).is_err() {
                             warn!("Stream receiver dropped by client, aborting compression");
                             return;
                         }
@@ -163,7 +147,7 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
                     Ok(_) => {}
                     Err(e) => {
                         error!("Error during LLM streaming: {e}");
-                        tx.send(Event::error(e.to_string())).ok();
+                        tx.send(Event::Error(e.to_string())).ok();
                         return;
                     }
                 }
@@ -176,24 +160,24 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
 
             let compressed_message = Message::assistant(vec![full_compressed_text.into()], vec![]);
 
-            info!("Waiting for session_shared lock to save compressed history...");
+            info!("Waiting for session lock to save compressed history...");
             let save_res = {
                 let session = session_shared.lock().await;
-                info!("Acquired session_shared lock. Inserting & shifting DB...");
+                info!("Acquired session lock. Inserting & shifting DB...");
                 let res = session
                     .insert_and_shift(compressed_message, to_preserve, compress_count)
                     .await;
-                info!("DB insert & shift complete. Releasing session_shared lock...");
+                info!("DB insert & shift complete. Releasing session lock...");
                 res
             };
 
             if let Err(e) = save_res {
                 error!("Failed to update DB with compressed history: {e}");
-                tx.send(Event::error(e.to_string())).ok();
+                tx.send(Event::Error(e.to_string())).ok();
                 return;
             }
 
-            tx.send(Event::finish()).ok();
+            tx.send(Event::Finish).ok();
             info!("Compression finished successfully for session {sid}");
         }
         .instrument(current)
@@ -203,16 +187,11 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
 /// Completely clears the session message history
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_clear(Paths(sid): Paths<SessionId>) -> Response {
-    info!("Requesting clear for session {sid}");
-
-    info!("Looking up Session::get...");
     if let Some(session_shared) = Session::get(&sid).await {
-        info!("Waiting for session_shared lock...");
+        info!("Waiting for session lock...");
         let res = {
             let session = session_shared.lock().await;
-            info!("Acquired session_shared lock. Executing clear...");
             let clear_res = session.clear().await;
-            info!("Clear complete. Releasing lock...");
             clear_res
         };
 
@@ -220,9 +199,8 @@ pub async fn handle_clear(Paths(sid): Paths<SessionId>) -> Response {
             error!("Failed to clear session {sid}: {e}");
             return Response::error().text(e.to_string());
         }
-        info!("Successfully cleared session {sid}");
     } else {
-        warn!("Attempted to clear non-existent session {sid}");
+        warn!("Attempted to clear non-existent session {sid}.");
     }
 
     Response::ok()
@@ -231,24 +209,17 @@ pub async fn handle_clear(Paths(sid): Paths<SessionId>) -> Response {
 /// Clones the user session and returns a new ID
 #[log(skip_all, fields(sid = %sid))]
 pub async fn handle_clone(Paths(sid): Paths<SessionId>) -> Response {
-    info!("Requesting clone for session {sid}");
-
-    info!("Looking up Session::get...");
     if let Some(session_shared) = Session::get(&sid).await {
-        info!("Waiting for session_shared lock...");
+        info!("Waiting for session lock...");
         let clone_res = {
             let session = session_shared.lock().await;
-            info!("Acquired session_shared lock. Executing duplicate...");
             let res = session.duplicate().await;
             info!("Duplicate complete. Releasing lock...");
             res
         };
 
         match clone_res {
-            Ok(new_sid) => {
-                info!("Session cloned to `{new_sid}`");
-                Response::ok().json(&json!({ "id": new_sid }))
-            }
+            Ok(new_sid) => Response::ok().json(&json!({ "id": new_sid })),
             Err(e) => {
                 let msg = format!("Failed to clone session: {e}");
                 error!("{msg}");
@@ -274,11 +245,11 @@ pub async fn handle_rules_list(Paths(sid): Paths<SessionId>) -> Response {
         return Response::error().text(err_msg);
     };
 
-    info!("Waiting for session_shared lock...");
+    info!("Waiting for session lock...");
     let rules_res = {
         let session = session_shared.lock().await;
-        info!("Acquired session_shared lock. Listing session rules...");
-        let res = session.list_session_rules().await;
+        info!("Acquired session lock. Listing session rules...");
+        let res = session.load_rules().await;
         info!("Rules listed. Releasing lock...");
         res
     };
@@ -308,10 +279,10 @@ pub async fn handle_rules_set(Paths(sid): Paths<SessionId>, data: Json<SetQuery>
         return Response::error().text(err_msg);
     };
 
-    info!("Waiting for session_shared lock...");
+    info!("Waiting for session lock...");
     let save_res = {
         let session = session_shared.lock().await;
-        info!("Acquired session_shared lock...");
+        info!("Acquired session lock...");
 
         if let Some(ref rule_id) = id {
             info!("Removing existing rule `{rule_id}` before overwrite...");
@@ -354,10 +325,10 @@ pub async fn handle_rules_remove(
         return Response::error().text(err_msg);
     };
 
-    info!("Waiting for session_shared lock...");
+    info!("Waiting for session lock...");
     let remove_res = {
         let session = session_shared.lock().await;
-        info!("Acquired session_shared lock. Removing rule `{rule_id}`...");
+        info!("Acquired session lock. Removing rule `{rule_id}`...");
         let res = session.remove_rule(rule_id.clone()).await;
         info!("Remove operation finished. Releasing lock...");
         res
@@ -392,11 +363,11 @@ pub async fn handle_rules_clear(Paths(sid): Paths<SessionId>) -> Response {
         return Response::error().text(err_msg);
     };
 
-    info!("Waiting for session_shared lock...");
+    info!("Waiting for session lock...");
     let clear_res = {
         let session = session_shared.lock().await;
-        info!("Acquired session_shared lock. Clearing local rules...");
-        let res = session.clear_local_rules().await;
+        info!("Acquired session lock. Clearing local rules...");
+        let res = session.clear_rules().await;
         info!("Local rules cleared. Releasing lock...");
         res
     };

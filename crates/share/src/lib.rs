@@ -40,16 +40,22 @@ pub use query::*;
 pub mod data;
 pub use data::*;
 
-pub fn macos_protect() {
-    #[cfg(target_os = "macos")]
-    {
-        tokio::spawn(async {
-            use tokio::io::AsyncReadExt;
-            let mut std_in = tokio::io::stdin();
-            let mut buf = [0; 1];
-            if let Ok(0) = std_in.read(&mut buf).await {
-                std::process::exit(0);
-            }
-        });
-    }
+pub mod uniq_id;
+pub use uniq_id::Id;
+
+#[macro_export]
+macro_rules! macos_protection {
+    () => {{
+        #[cfg(target_os = "macos")]
+        {
+            tokio::spawn(async {
+                use tokio::io::AsyncReadExt;
+                let mut std_in = tokio::io::stdin();
+                let mut buf = [0; 1];
+                if let Ok(0) = std_in.read(&mut buf).await {
+                    std::process::exit(0);
+                }
+            });
+        }
+    }};
 }

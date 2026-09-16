@@ -134,10 +134,10 @@ pub async fn handle_media_play(tx: Sender<Bytes>, _payload: JsonValue) -> Result
         Ok(_) => {
             let msg = "Media playback started successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to start media playback: {e:?}").into()),
+        Err(e) => Err(format!("Failed to start media playback: {e:?}").into()),
     }
 }
 
@@ -148,10 +148,10 @@ pub async fn handle_media_pause(tx: Sender<Bytes>, _payload: JsonValue) -> Resul
         Ok(_) => {
             let msg = "Media playback paused successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to pause media playback: {e:?}").into()),
+        Err(e) => Err(format!("Failed to pause media playback: {e:?}").into()),
     }
 }
 
@@ -161,10 +161,10 @@ pub async fn handle_media_play_pause(tx: Sender<Bytes>, _payload: JsonValue) -> 
         Ok(_) => {
             let msg = "Media playback toggled successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to toggle media playback: {e:?}").into()),
+        Err(e) => Err(format!("Failed to toggle media playback: {e:?}").into()),
     }
 }
 
@@ -174,10 +174,10 @@ pub async fn handle_media_stop(tx: Sender<Bytes>, _payload: JsonValue) -> Result
         Ok(_) => {
             let msg = "Media playback stopped successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to stop media playback: {e:?}").into()),
+        Err(e) => Err(format!("Failed to stop media playback: {e:?}").into()),
     }
 }
 
@@ -187,10 +187,10 @@ pub async fn handle_media_next_track(tx: Sender<Bytes>, _payload: JsonValue) -> 
         Ok(_) => {
             let msg = "Skipped to the next track successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to skip to the next track: {e:?}").into()),
+        Err(e) => Err(format!("Failed to skip to the next track: {e:?}").into()),
     }
 }
 
@@ -200,10 +200,10 @@ pub async fn handle_media_previous_track(tx: Sender<Bytes>, _payload: JsonValue)
         Ok(_) => {
             let msg = "Returned to the previous track successfully.";
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to return to the previous track: {e:?}").into()),
+        Err(e) => Err(format!("Failed to return to the previous track: {e:?}").into()),
     }
 }
 
@@ -216,10 +216,10 @@ pub async fn handle_media_seek_forward(tx: Sender<Bytes>, action: SeekAction) ->
                 action.seconds
             );
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to seek forward: {e:?}").into()),
+        Err(e) => Err(format!("Failed to seek forward: {e:?}").into()),
     }
 }
 
@@ -232,10 +232,10 @@ pub async fn handle_media_seek_backward(tx: Sender<Bytes>, action: SeekAction) -
                 action.seconds
             );
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to seek backward: {e:?}").into()),
+        Err(e) => Err(format!("Failed to seek backward: {e:?}").into()),
     }
 }
 
@@ -246,10 +246,10 @@ pub async fn handle_media_metadata(tx: Sender<Bytes>, _payload: JsonValue) -> Re
             let msg = str!(metadata);
 
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to retrieve media metadata: {e:?}").into()),
+        Err(e) => Err(format!("Failed to retrieve media metadata: {e:?}").into()),
     }
 }
 
@@ -257,12 +257,12 @@ pub async fn handle_media_metadata(tx: Sender<Bytes>, _payload: JsonValue) -> Re
 pub async fn handle_media_position(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::position().await {
         Ok(position) => {
-            let msg = str!("Current playback position: {:?}.", position);
+            let msg = format!("Current playback position: {:?}.", position);
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to retrieve playback position: {e:?}").into()),
+        Err(e) => Err(format!("Failed to retrieve playback position: {e:?}").into()),
     }
 }
 
@@ -270,12 +270,12 @@ pub async fn handle_media_position(tx: Sender<Bytes>, _payload: JsonValue) -> Re
 pub async fn handle_media_duration(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match MediaControl::duration().await {
         Ok(duration) => {
-            let msg = str!("Current media duration: {:?}.", duration);
+            let msg = format!("Current media duration: {:?}.", duration);
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to retrieve media duration: {e:?}").into()),
+        Err(e) => Err(format!("Failed to retrieve media duration: {e:?}").into()),
     }
 }
 
@@ -298,10 +298,10 @@ pub async fn handle_set_volume(tx: Sender<Bytes>, action: SetVolumeAction) -> Re
                 action.volume
             );
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to update audio volume: {e:?}").into()),
+        Err(e) => Err(format!("Failed to update audio volume: {e:?}").into()),
     }
 }
 
@@ -309,12 +309,13 @@ pub async fn handle_set_volume(tx: Sender<Bytes>, action: SetVolumeAction) -> Re
 pub async fn handle_increase_volume(tx: Sender<Bytes>, action: DeltaVolumeAction) -> Result<()> {
     match AudioControl::increase_volume(action.amount).await {
         Ok(volume) => {
-            let msg = str!("The audio volume increased successfully. Current volume: {volume}%.",);
+            let msg =
+                format!("The audio volume increased successfully. Current volume: {volume}%.",);
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to update the audio volume: {e:?}").into()),
+        Err(e) => Err(format!("Failed to update the audio volume: {e:?}").into()),
     }
 }
 
@@ -322,12 +323,13 @@ pub async fn handle_increase_volume(tx: Sender<Bytes>, action: DeltaVolumeAction
 pub async fn handle_decrease_volume(tx: Sender<Bytes>, action: DeltaVolumeAction) -> Result<()> {
     match AudioControl::decrease_volume(action.amount).await {
         Ok(volume) => {
-            let msg = str!("The audio volume decreased successfully. Current volume: {volume}%.",);
+            let msg =
+                format!("The audio volume decreased successfully. Current volume: {volume}%.",);
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to update the audio volume: {e:?}").into()),
+        Err(e) => Err(format!("Failed to update the audio volume: {e:?}").into()),
     }
 }
 
@@ -335,12 +337,12 @@ pub async fn handle_decrease_volume(tx: Sender<Bytes>, action: DeltaVolumeAction
 pub async fn handle_get_volume(tx: Sender<Bytes>, _payload: JsonValue) -> Result<()> {
     match AudioControl::get_volume().await {
         Ok(volume) => {
-            let msg = str!("The current audio volume level is {volume}%.");
+            let msg = format!("The current audio volume level is {volume}%.");
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to get the audio volume: {e:?}").into()),
+        Err(e) => Err(format!("Failed to get the audio volume: {e:?}").into()),
     }
 }
 
@@ -359,10 +361,10 @@ pub async fn handle_set_mute(tx: Sender<Bytes>, action: MuteAction) -> Result<()
                 "The audio unmuted successfully."
             };
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to update audio mute state: {e:?}").into()),
+        Err(e) => Err(format!("Failed to update audio mute state: {e:?}").into()),
     }
 }
 
@@ -376,10 +378,10 @@ pub async fn handle_is_muted(tx: Sender<Bytes>, _payload: JsonValue) -> Result<(
                 "The audio is currently unmuted."
             };
             info!("{msg}");
-            tx.send(Event::answer(msg))?;
+            tx.send(Event::Answer(msg.into()))?;
             Ok(())
         }
-        Err(e) => Err(str!("Failed to get audio mute state: {e:?}").into()),
+        Err(e) => Err(format!("Failed to get audio mute state: {e:?}").into()),
     }
 }
 
@@ -393,16 +395,16 @@ pub struct MusicAction {
 }
 
 async fn music_index() -> Result<MusicIndexer> {
-    if MUSIC_INDEX.get().await.is_none() {
+    if MUSIC_INDEX.get().is_none() {
         let index = MusicIndexer::scan_default(path!("$cache$/music-index.json")).await?;
         MUSIC_INDEX.set(Some(index)).await;
     }
 
     MUSIC_INDEX
-        .dirty_get()
+        .get()
         .as_ref()
         .clone()
-        .ok_or_else(|| str!("Failed to initialize music indexer").into())
+        .ok_or_else(|| format!("Failed to initialize music indexer").into())
 }
 
 #[log(skip_all, fields(action))]
@@ -430,7 +432,7 @@ pub async fn handle_search_music(tx: Sender<Bytes>, mut action: MusicAction) -> 
     let tracks = target.tracks();
 
     let msg = if tracks.is_empty() {
-        str!("No matching music was found.")
+        format!("No matching music was found.")
     } else {
         // Берем первые 10-15 треков для контекста LLM
         let limit = 15;
@@ -456,7 +458,7 @@ pub async fn handle_search_music(tx: Sender<Bytes>, mut action: MusicAction) -> 
     };
 
     info!("{msg}");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
 
     Ok(())
 }
@@ -486,9 +488,9 @@ pub async fn handle_play_music(tx: Sender<Bytes>, mut action: MusicAction) -> Re
     let tracks = target.tracks();
 
     if tracks.is_empty() {
-        let msg = str!("No matching music was found.");
+        let msg = format!("No matching music was found.");
         info!("{msg}");
-        tx.send(Event::answer(msg))?;
+        tx.send(Event::Answer(msg))?;
         return Ok(());
     }
 
@@ -502,7 +504,7 @@ pub async fn handle_play_music(tx: Sender<Bytes>, mut action: MusicAction) -> Re
     );
 
     info!("{msg}");
-    tx.send(Event::answer(msg))?;
+    tx.send(Event::Answer(msg))?;
 
     Ok(())
 }

@@ -1,12 +1,17 @@
+//! JavaScript runtime module (Boa Engine).
+
 use crate::prelude::*;
+
 use boa_engine::{Context, JsValue, Source, value::TryFromJs, vm::RuntimeLimits};
 
+/// JavaScript runtime executor
 pub struct Runtime {
+    /// Isolated runtime context
     context: Context,
 }
 
 impl Runtime {
-    /// Creates a new JavaScript runtime with configured limits.
+    /// Creates new JavaScript runtime with configured limits.
     pub fn new() -> Self {
         let mut context = Context::default();
         let runtime_settings = &Settings::get().runtime;
@@ -24,21 +29,24 @@ impl Runtime {
     /// Evaluates JavaScript and returns the result as a string.
     #[log(skip_all)]
     pub fn eval(&mut self, code: &str) -> Result<String> {
-        info!("Executing JS script code: {:80}...", &code);
+        info!("Executing JS script: {code:80}...");
 
         let value = self
             .context
             .eval(Source::from_bytes(code))
             .map_err(|e| format!("JS Execution Error: {e}"))?;
 
-        js_to_string(&value, &mut self.context).map_err(|e| e.to_string().into())
+        self.js_to_string(&value).map_err(|e| e.to_string().into())
     }
 
     /// Evaluates JavaScript and converts the result to a Rust type.
+    #[log(skip_all)]
     pub fn eval_json<T>(&mut self, code: &str) -> Result<T>
     where
         T: TryFromJs,
     {
+        info!("Executing JS script: {code:80}...");
+
         let value = self
             .context
             .eval(Source::from_bytes(code))
@@ -51,38 +59,41 @@ impl Runtime {
     pub fn reset(&mut self) {
         *self = Self::new();
     }
+
+    /// Helper method to convert JS type to string
+    fn js_to_string(&mut self, value: &JsValue) -> StdResult<String, boa_engine::JsError> {
+        if value.is_null() {
+            return Ok("null".into());
+        }
+
+        if value.is_undefined() {
+            return Ok("undefined".into());
+        }
+
+        if let Some(s) = value.as_string() {
+            return Ok(s.to_std_string_escaped());
+        }
+
+        if value.is_object() {
+            self.context.register_global_property(
+                boa_engine::js_string!("__value__"),
+                value.clone(),
+                boa_engine::property::Attribute::all(),
+            )?;
+
+            let json = self
+                .context
+                .eval(Source::from_bytes("JSON.stringify(__value__)"))?;
+
+            return Ok(json.to_string(&mut self.context)?.to_std_string_escaped());
+        }
+
+        Ok(value.to_string(&mut self.context)?.to_std_string_escaped())
+    }
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn js_to_string(value: &JsValue, ctx: &mut Context) -> StdResult<String, boa_engine::JsError> {
-    if value.is_null() {
-        return Ok("null".into());
-    }
-
-    if value.is_undefined() {
-        return Ok("undefined".into());
-    }
-
-    if let Some(s) = value.as_string() {
-        return Ok(s.to_std_string_escaped());
-    }
-
-    if value.is_object() {
-        ctx.register_global_property(
-            boa_engine::js_string!("__osy_value__"),
-            value.clone(),
-            boa_engine::property::Attribute::all(),
-        )?;
-
-        let json = ctx.eval(Source::from_bytes("JSON.stringify(__osy_value__)"))?;
-
-        return Ok(json.to_string(ctx)?.to_std_string_escaped());
-    }
-
-    Ok(value.to_string(ctx)?.to_std_string_escaped())
 }

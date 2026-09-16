@@ -1,40 +1,52 @@
-use super::{error, info, success};
-use crate::{helpers, prelude::*};
+use crate::{
+    prelude::*,
+    utils::{self, SudoGuard},
+};
 
 use anylm::api::{Message, Messages, Role, Visibility};
 use chrono::Local;
 use osy_share::{
-    CompactQuery, Event, HandleQuery, ListQuery, RemoveQuery, SearchQuery, SessionId, SessionInfo,
-    SetQuery, UserFact, UserRule,
+    CommandResult, CompactQuery, DialogEvent, Event, HandleQuery, ListQuery, RemoveQuery,
+    SearchQuery, SessionId, SetQuery, UserFact, UserRule,
 };
 use rigging::{
     Stylize,
-    style::{Align, BorderStyle, LineStyle, Margin, Padding, SpinnerStyle},
-    widgets::{Input, Text},
+    render::SubWidgetPosition,
+    style::{Align, BorderStyle, LineStyle, SpinnerStyle},
+    widgets::{ConfirmPrompt, Input, Print, SelectMenu, Text},
 };
-use std::sync::Arc;
-use tokio::{process::Command, sync::Mutex};
+use tokio::process::Command;
 
 const MIN_WIDTH: usize = 80;
 const INPUT_MAX_HEIGHT: usize = 20;
 
-/// API: Handles the interactive CLI chat session lifecycle.
-pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Result<()> {
-    // initialize base endpoint address and tcp client
+/// API: Handles interactive chat with assistant.
+pub async fn handle_chat(
+    uid: u64,
+    new_session: bool,
+    load_history: bool,
+    use_sudo: bool,
+) -> Result<()> {
+    let _sudo = if use_sudo {
+        Some(SudoGuard::new()?)
+    } else {
+        None
+    };
+
     let port = Settings::get().server.port;
-    let base_url = str!("http://127.0.0.1:{port}");
+    let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::tcp();
 
-    // refresh/start the kernel server
-    refresh_server(&client, &base_url).await?;
+    // refresh/start kernel server
+    ensure_server(&client, &base_url).await?;
 
     // init user session handling
-    let session_id = arc_mutex!(if new_session {
+    let session_id = State::from(if new_session {
         SessionId::new(uid)
     } else {
         get_last_sid(&client, &base_url, uid).await
     });
-    init_session(&client, &base_url, session_id.clone(), load_history).await?;
+    init_session(&client, &base_url, session_id.get_cloned(), load_history).await?;
 
     let run_loop = async {
         loop {
@@ -63,11 +75,12 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                 .use_buffer(0, Some(100))
                 .min_width(MIN_WIDTH)
                 .max_height(INPUT_MAX_HEIGHT)
-                .border(BorderStyle::Rounded)
+                .border_style(BorderStyle::Rounded)
                 .border_color(brand_color)
-                .background(bg_color)
-                .padding(Padding::hor(1))
+                .background_color(bg_color)
+                .padding_hor(1)
                 .multiline(true)
+                .show_cursor(true)
                 .clear_after(true)
                 .render()
                 .await?;
@@ -116,14 +129,19 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                 // helper for displaying results in the UI
                 let render_msg = |msg: String| async move {
                     Text::new("")
+                        .markdown(true)
                         .min_width(MIN_WIDTH)
-                        .border(BorderStyle::Rounded)
+                        .border_style(BorderStyle::Rounded)
                         .border_color(brand_color)
-                        .code_color(brand_color)
-                        .background(bg_color)
-                        .padding(Padding::hor(1))
-                        .margin(Margin::default().bottom(1))
-                        .handler(async move |handle| handle.update(msg))
+                        .accent_color(brand_color)
+                        .background_color(bg_color)
+                        .padding_hor(1)
+                        .margin_bottom(1)
+                        .handler(move |mut ctx| async move {
+                            *ctx.state = msg;
+                            ctx.notify();
+                            ctx.finish();
+                        })
                         .render()
                         .await
                 };
@@ -323,7 +341,10 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                             let endpoint = format!("{base_url}/users/{uid}/facts/search");
                             let res = client
                                 .post(&endpoint)
-                                .json(&SearchQuery { query: payload })
+                                .json(&SearchQuery {
+                                    query: payload,
+                                    limit: None,
+                                })
                                 .send()
                                 .await;
 
@@ -334,7 +355,7 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                                         match r.text().await {
                                             Ok(body) => {
                                                 if let Ok(facts) =
-                                                    serde_json::from_str::<Vec<UserFact>>(&body)
+                                                    json::from_str::<Vec<UserFact>>(&body)
                                                 {
                                                     if facts.is_empty() {
                                                         "No matching facts found.".to_string()
@@ -344,7 +365,7 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                                                             facts
                                                                 .iter()
                                                                 .map(|f| format!(
-                                                                    "• [{}] {}",
+                                                                    "• `{}`: {}",
                                                                     f.id, f.text
                                                                 ))
                                                                 .collect::<Vec<_>>()
@@ -352,7 +373,7 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                                                         )
                                                     }
                                                 } else if let Ok(facts) =
-                                                    serde_json::from_str::<Vec<String>>(&body)
+                                                    json::from_str::<Vec<String>>(&body)
                                                 {
                                                     if facts.is_empty() {
                                                         "No matching facts found.".to_string()
@@ -620,7 +641,7 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
 
                         let msg = match client
                             .post(&format!("{base_url}/sessions/{new_sid}/init"))
-                            .json(&get_session_info())
+                            .json(&utils::session_info())
                             .send()
                             .await
                         {
@@ -737,16 +758,18 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                             .unwrap_or_else(|| Settings::get().execution.preserve_messages);
 
                         Text::new("Compressing context...")
+                            .markdown(true)
                             .title(" Thinking... ".bold().with(brand_color), Align::TopLeft)
                             .min_width(MIN_WIDTH)
                             .spinner_style(SpinnerStyle::Dots)
                             .spinner_color(brand_color)
-                            .border(BorderStyle::Rounded)
+                            .border_style(BorderStyle::Rounded)
                             .border_color(brand_color)
-                            .background(bg_color)
-                            .padding(Padding::hor(1))
-                            .margin(Margin::default().bottom(1))
-                            .handler(move |handle| async move {
+                            .background_color(bg_color)
+                            .padding_hor(1)
+                            .margin_bottom(1)
+                            .accent_color(brand_color)
+                            .handler(move |mut ctx| async move {
                                 let endpoint = format!("{base_url}/sessions/{sid}/compact");
                                 let res = Client::tcp()
                                     .post(&endpoint)
@@ -762,23 +785,30 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                                         while let Ok(Some(event)) = stream.recv().await {
                                             match event {
                                                 Event::Thinking(status) => {
-                                                    handle.update(format!("[{status}]"));
+                                                    *ctx.state = format!("[{status}]");
+                                                    ctx.notify();
                                                 }
                                                 Event::Answer(text) => {
                                                     summary.push_str(&text);
-                                                    handle.update(summary.clone());
+                                                    *ctx.state = summary.clone();
+                                                    ctx.notify();
                                                 }
                                                 Event::Error(err) => {
-                                                    handle.update(format!(
-                                                        "Compression error: {err}"
-                                                    ));
+                                                    *ctx.state =
+                                                        format!("Compression error: {err}");
+                                                    ctx.notify();
                                                 }
+                                                Event::Dialog(_) => {}
                                                 Event::Finish => break,
                                             }
                                         }
                                     }
-                                    Err(e) => handle.update(format!("Network error: {e}")),
+                                    Err(e) => {
+                                        *ctx.state = format!("Network error: {e}");
+                                        ctx.notify();
+                                    }
                                 }
+                                ctx.finish();
                             })
                             .render()
                             .await?;
@@ -786,7 +816,7 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
                     }
 
                     cmd => {
-                        render_msg(str!(
+                        render_msg(format!(
                             "Unknown command `{cmd}`. Print `/help` to see available commands list."
                         ))
                         .await?;
@@ -799,61 +829,356 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
             // prepare query request payload and UI metadata
             let sid = session_id.lock().await.clone();
             let timestamp = Local::now().format("%a %I:%M %p").to_string();
+            let user_msg = trimmed.to_owned();
             let query_msg = Message::user(vec![trimmed.into()]);
 
-            // render active prompt box and stream completion events from server
-            Text::new(format!("{}", trimmed.grey()))
+            // render user message
+            Text::new("")
                 .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
+                .markdown(true)
+                .min_width(MIN_WIDTH)
+                .border_style(BorderStyle::Rounded)
+                .border_color(alt_color)
+                .background_color(bg_color)
+                .padding_hor(1)
+                .accent_color(brand_color)
+                .handler(move |mut ctx| async move {
+                    *ctx.state = user_msg;
+                    ctx.notify();
+                    ctx.finish();
+                })
+                .render()
+                .await?;
+
+            // render response message
+            Text::new("")
+                .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
+                .markdown(true)
                 .min_width(MIN_WIDTH)
                 .spinner_style(SpinnerStyle::MiniDots)
                 .spinner_color(brand_color)
-                .prefix_color(alt_color)
                 .prefix_line(LineStyle::Solid)
-                .border(BorderStyle::Rounded)
-                .border_color(alt_color)
-                .background(bg_color)
-                .padding(Padding::hor(1))
-                .margin(Margin::default().bottom(1))
-                .handler(move |handle| async move {
+                .prefix_color(alt_color)
+                .border_style(BorderStyle::Rounded)
+                .border_color(brand_color)
+                .accent_color(brand_color)
+                .background_color(bg_color)
+                .padding_hor(1)
+                .margin_bottom(1)
+                .handler(move |mut ctx| async move {
+                    let mut full_response = String::new();
+                    let mut status_msg: Option<String> = None;
+
                     // establish async SSE event stream connection with server
                     let res = Client::tcp()
-                        .post(&str!("{base_url}/sessions/{sid}/query"))
+                        .post(&format!("{base_url}/sessions/{sid}/query"))
                         .json(&HandleQuery { message: query_msg })
                         .stream::<Event>()
                         .await;
 
                     match res {
                         Ok(mut stream) => {
-                            let mut full_response = String::new();
+                            let update_ui =
+                                |state: &mut String, resp: &str, status: Option<&str>| match (
+                                    resp.is_empty(),
+                                    status,
+                                ) {
+                                    (true, Some(st)) => *state = st.to_string(),
+                                    (false, Some(st)) => *state = format!("{resp}\n\n{st}"),
+                                    (_, None) => *state = resp.to_string(),
+                                };
 
                             // process streaming tokens and update widget buffer in real time
                             while let Ok(Some(event)) = stream.recv().await {
                                 match event {
                                     Event::Thinking(status) => {
-                                        if full_response.is_empty() {
-                                            handle.update(format!("{}", status.italic().dim()));
-                                        }
+                                        status_msg = Some(format!("{}", status.italic().dim()));
+                                        update_ui(
+                                            &mut ctx.state,
+                                            &full_response,
+                                            status_msg.as_deref(),
+                                        );
+                                        ctx.sync_n(3);
+                                        ctx.notify();
                                     }
                                     Event::Answer(chunk) => {
                                         full_response.push_str(&chunk);
-                                        handle.update(full_response.clone());
+                                        update_ui(
+                                            &mut ctx.state,
+                                            &full_response,
+                                            status_msg.as_deref(),
+                                        );
+                                        ctx.sync_n(3);
+                                        ctx.notify();
                                     }
                                     Event::Error(err) => {
-                                        handle.update(format!("\n[ERROR] {err}"));
+                                        let formatted_err =
+                                            if let Some((title, msg)) = err.split_once(':') {
+                                                format!(
+                                                    "{}{} {}",
+                                                    "Error: ".red().bold(),
+                                                    title.red().bold(),
+                                                    msg
+                                                )
+                                            } else {
+                                                format!("{} {}", "Error: ".red().bold(), err)
+                                            };
+
+                                        status_msg = Some(formatted_err);
+                                        update_ui(
+                                            &mut ctx.state,
+                                            &full_response,
+                                            status_msg.as_deref(),
+                                        );
+                                        ctx.sync_n(3);
+                                        ctx.notify();
                                     }
-                                    Event::Finish => break,
+
+                                    // --- Interactive Dialog Event Handling ---
+                                    Event::Dialog(dialog_event) => match dialog_event {
+                                        // bash execution in background
+                                        DialogEvent::Script { id, code } => {
+                                            status_msg = Some(format!(
+                                                "{}",
+                                                "Executing script...".italic().dim()
+                                            ));
+                                            update_ui(
+                                                &mut ctx.state,
+                                                &full_response,
+                                                status_msg.as_deref(),
+                                            );
+                                            ctx.sync_n(3);
+                                            ctx.notify();
+
+                                            let output = tokio::process::Command::new("bash")
+                                                .arg("-c")
+                                                .arg(&code)
+                                                .output()
+                                                .await;
+
+                                            let result_payload = match output {
+                                                Ok(out) => CommandResult {
+                                                    stdout: String::from_utf8_lossy(&out.stdout)
+                                                        .to_string(),
+                                                    stderr: String::from_utf8_lossy(&out.stderr)
+                                                        .to_string(),
+                                                    exit_code: out.status.code().unwrap_or(-1)
+                                                        as i16,
+                                                    success: out.status.success(),
+                                                },
+                                                Err(e) => CommandResult {
+                                                    stdout: String::new(),
+                                                    stderr: e.to_string(),
+                                                    exit_code: -1,
+                                                    success: false,
+                                                },
+                                            };
+
+                                            let callback_url = format!("{base_url}/callback/{id}");
+                                            let _ = Client::tcp()
+                                                .post(&callback_url)
+                                                .json(&result_payload)
+                                                .send()
+                                                .await;
+
+                                            status_msg = None;
+                                            update_ui(
+                                                &mut ctx.state,
+                                                &full_response,
+                                                status_msg.as_deref(),
+                                            );
+                                            ctx.sync_n(3);
+                                            ctx.notify();
+                                        }
+
+                                        // action confirmation [y/n]
+                                        DialogEvent::Confirm {
+                                            id,
+                                            prompt,
+                                            default,
+                                        } => {
+                                            let mut confirm_block = ConfirmPrompt::new(&prompt)
+                                                .markdown(true)
+                                                .min_width(MIN_WIDTH)
+                                                .border_style(BorderStyle::Rounded)
+                                                .border_color(brand_color)
+                                                .accent_color(brand_color)
+                                                .padding_hor(1)
+                                                .margin_bottom(1)
+                                                .background_color(bg_color)
+                                                .clear_after(true);
+                                            if let Some(def) = default {
+                                                confirm_block = confirm_block.default(def);
+                                            }
+
+                                            if let Ok(value) = ctx
+                                                .show_sub_widget(
+                                                    confirm_block,
+                                                    SubWidgetPosition::Replace,
+                                                )
+                                                .await
+                                            {
+                                                let callback_url =
+                                                    format!("{base_url}/callback/{id}");
+                                                let _ = Client::tcp()
+                                                    .post(&callback_url)
+                                                    .json(&value)
+                                                    .send()
+                                                    .await;
+                                            }
+                                        }
+
+                                        // prompt text input
+                                        DialogEvent::Prompt {
+                                            id,
+                                            prompt,
+                                            placeholder,
+                                            default,
+                                            multiline,
+                                        } => {
+                                            let is_multi = multiline.unwrap_or(false);
+                                            let mut input_block = Input::new()
+                                                .title(
+                                                    prompt.bold().with(brand_color),
+                                                    Align::TopLeft,
+                                                )
+                                                .min_width(MIN_WIDTH)
+                                                .border_style(BorderStyle::Rounded)
+                                                .border_color(brand_color)
+                                                .background_color(bg_color)
+                                                .padding_hor(1)
+                                                .margin_bottom(1)
+                                                .multiline(is_multi)
+                                                .show_cursor(true)
+                                                .clear_after(true);
+
+                                            if let Some(ph) = placeholder {
+                                                input_block =
+                                                    input_block.placeholder(ph.with(alt_color));
+                                            }
+                                            if let Some(def) = default {
+                                                input_block = input_block.default_val(def);
+                                            }
+
+                                            if let Ok(res) = ctx
+                                                .show_sub_widget(
+                                                    input_block,
+                                                    SubWidgetPosition::Replace,
+                                                )
+                                                .await
+                                            {
+                                                let value = if res.trim().is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(res)
+                                                };
+                                                let callback_url =
+                                                    format!("{base_url}/callback/{id}");
+                                                let _ = Client::tcp()
+                                                    .post(&callback_url)
+                                                    .json(&value)
+                                                    .send()
+                                                    .await;
+                                            }
+                                        }
+
+                                        // secret input
+                                        DialogEvent::Secret {
+                                            id,
+                                            prompt,
+                                            placeholder,
+                                        } => {
+                                            let mut input_block = Input::new()
+                                                .title(
+                                                    prompt.bold().with(brand_color),
+                                                    Align::TopLeft,
+                                                )
+                                                .min_width(MIN_WIDTH)
+                                                .border_style(BorderStyle::Rounded)
+                                                .border_color(brand_color)
+                                                .background_color(bg_color)
+                                                .padding_hor(1)
+                                                .margin_bottom(1)
+                                                .secret(true)
+                                                .show_cursor(true)
+                                                .clear_after(true);
+
+                                            if let Some(ph) = placeholder {
+                                                input_block =
+                                                    input_block.placeholder(ph.with(alt_color));
+                                            }
+
+                                            if let Ok(res) = ctx
+                                                .show_sub_widget(
+                                                    input_block,
+                                                    SubWidgetPosition::Replace,
+                                                )
+                                                .await
+                                            {
+                                                let value = if res.trim().is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(res)
+                                                };
+                                                let callback_url =
+                                                    format!("{base_url}/callback/{id}");
+                                                let _ = Client::tcp()
+                                                    .post(&callback_url)
+                                                    .json(&value)
+                                                    .send()
+                                                    .await;
+                                            }
+                                        }
+
+                                        // select menu
+                                        DialogEvent::Select { id, prompt, items } => {
+                                            let select_block = SelectMenu::new(prompt, items)
+                                                .min_width(MIN_WIDTH)
+                                                .border_style(BorderStyle::Rounded)
+                                                .border_color(brand_color)
+                                                .padding_hor(1)
+                                                .margin_bottom(1)
+                                                .background_color(bg_color)
+                                                .clear_after(true);
+
+                                            if let Ok(value) = ctx
+                                                .show_sub_widget(
+                                                    select_block,
+                                                    SubWidgetPosition::Replace,
+                                                )
+                                                .await
+                                            {
+                                                let callback_url =
+                                                    format!("{base_url}/callback/{id}");
+                                                let _ = Client::tcp()
+                                                    .post(&callback_url)
+                                                    .json(&value)
+                                                    .send()
+                                                    .await;
+                                            }
+                                        }
+                                    },
+
+                                    Event::Finish => {
+                                        let _ = status_msg.take();
+                                        update_ui(&mut ctx.state, &full_response, None);
+                                        break;
+                                    }
                                 }
                             }
+
+                            ctx.sync();
+                            ctx.notify();
                         }
                         Err(err) => {
-                            handle.update(format!("\n[ERROR] Connection failed: {err}"));
+                            *ctx.state =
+                                format!("\n{} Connection failed: {err}", "Error:".red().bold());
+                            ctx.notify();
                         }
                     }
+                    ctx.finish();
                 })
                 .blink_color(blink_color)
-                .prefix_color(alt_color)
-                .bullet_color(brand_color)
-                .code_color(brand_color)
                 .render()
                 .await?;
         }
@@ -864,34 +1189,32 @@ pub async fn handle_chat(uid: u64, new_session: bool, load_history: bool) -> Res
     let res = run_loop.await;
 
     // flush backend state and finalize active chat session cleanly
-    info("", "Flushing DB records and closing session cleanly...");
+    Print::h1("Flushing DB records and closing session cleanly...")
+        .render()
+        .await?;
     let final_sid = session_id.lock().await.clone();
     let finish_url = format!("http://127.0.0.1:{port}/sessions/{final_sid}/finish");
 
     if let Err(e) = Client::tcp().post(&finish_url).send().await {
-        error(str!("Warning: Failed to finish session cleanly on backend: {e}").into());
+        Print::error(format!("Failed to finish session: {e}"))
+            .margin_top(1)
+            .render()
+            .await?;
     } else {
-        success("Session closed successfully.");
+        Print::success("Session closed successfully.")
+            .margin_top(1)
+            .render()
+            .await?;
     }
 
     res
 }
 
-// Capture local environment metadata for backend handshake
-fn get_session_info() -> SessionInfo {
-    let tz_minutes = (chrono::Local::now().offset().local_minus_utc() / 60) as i16;
-    SessionInfo {
-        current_path: std::env::current_dir().ok(),
-        timezone: tz_minutes,
-    }
-}
-
-/// Refreshes/starts the kernel server
-async fn refresh_server(client: &Client, base_url: &str) -> Result<()> {
+/// Ensures that kernel server is started.
+async fn ensure_server(client: &Client, base_url: &str) -> Result<()> {
     // verify whether the backend server is reachable
     if client
-        .get(&str!("{base_url}/refresh"))
-        .timeout(Duration::from_millis(500))
+        .get(&format!("{base_url}/ping"))
         .send()
         .await
         .is_err()
@@ -902,15 +1225,15 @@ async fn refresh_server(client: &Client, base_url: &str) -> Result<()> {
             .spawn()
             .is_ok()
         {
-            let ping_url = str!("{base_url}/ping");
+            let ping_url = format!("{base_url}/ping");
             let mut is_ok = false;
 
             // poll status endpoint until service responds or times out
             for _ in 0..10 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
                 if client
                     .get(&ping_url)
-                    .timeout(Duration::from_millis(500))
+                    .timeout(Duration::from_millis(1000))
                     .send()
                     .await
                     .is_ok()
@@ -936,9 +1259,9 @@ async fn refresh_server(client: &Client, base_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Returns the active session id
+/// Returns recently active session ID.
 async fn get_last_sid(client: &Client, base_url: &str, uid: u64) -> SessionId {
-    let sessions_url = str!("{base_url}/users/{uid}/sessions");
+    let sessions_url = format!("{base_url}/users/{uid}/sessions");
     let sessions_query = ListQuery { count: Some(1) };
 
     // fetch existing active session for current user
@@ -958,17 +1281,17 @@ async fn get_last_sid(client: &Client, base_url: &str, uid: u64) -> SessionId {
     SessionId::new(uid)
 }
 
+/// Initializes user session.
 async fn init_session(
     client: &Client,
     base_url: &str,
-    sid: Arc<Mutex<SessionId>>,
+    sid: SessionId,
     load_history: bool,
 ) -> Result<()> {
     // initialize session on backend and retrieve history payload
-    let current_sid = sid.lock().await.clone();
     let init_res = client
-        .post(&str!("{base_url}/sessions/{current_sid}/init"))
-        .json(&get_session_info())
+        .post(&format!("{base_url}/sessions/{sid}/init"))
+        .json(&utils::session_info())
         .send()
         .await;
 
@@ -988,102 +1311,59 @@ async fn init_session(
             let alt_color = cfg.theme.alt_color();
 
             if load_history {
-                // assemble sequential user and final assistant message pairs
-                let mut pairs: Vec<(&Message, Option<&Message>)> = Vec::new();
-                let mut current_user_msg: Option<&Message> = None;
-                let mut last_assistant_msg: Option<&Message> = None;
-
                 for msg in valid_messages {
-                    match msg.role {
-                        Role::User => {
-                            // save previous user-assistant pair before advancing
-                            if let Some(user) = current_user_msg.take() {
-                                pairs.push((user, last_assistant_msg.take()));
-                            }
-                            current_user_msg = Some(msg);
-                        }
-                        Role::Assistant => {
-                            let text = helpers::extract_text_from_msg(msg).unwrap_or_default();
-                            // bind assistant message only when non-empty textual content exists
-                            if !text.trim().is_empty() {
-                                if current_user_msg.is_some() {
-                                    last_assistant_msg = Some(msg);
-                                } else {
-                                    // handle standalone system/assistant greetings
-                                    pairs.push((msg, None));
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                    let is_user = msg.role == Role::User;
+                    let border_c = if is_user { alt_color } else { brand_color };
+                    let msg_text = msg.extract_texts().concat();
+                    let timestamp = if let Some(dt) = msg.timestamp {
+                        format!(" {} ", dt.format("%a %I:%M %p").to_string())
+                            .with(alt_color)
+                            .to_string()
+                    } else {
+                        str!(" -:- ")
+                    };
 
-                // push final remaining pair to collection
-                if let Some(user) = current_user_msg {
-                    pairs.push((user, last_assistant_msg));
-                }
-
-                // render paired history entries into terminal widgets
-                for (user_or_single_msg, assistant_msg) in pairs {
-                    let user_text =
-                        helpers::extract_text_from_msg(user_or_single_msg).unwrap_or_default();
-
-                    let (user_display_text, asst_display_text) =
-                        match (user_or_single_msg.role.clone(), assistant_msg) {
-                            (Role::User, Some(asst)) => {
-                                let asst_text =
-                                    helpers::extract_text_from_msg(asst).unwrap_or_default();
-                                (user_text.clone(), asst_text)
-                            }
-                            (Role::User, None) => (user_text.clone(), String::new()),
-                            _ => (user_text.clone(), String::new()),
-                        };
-
-                    let timestamp_str = user_or_single_msg
-                        .timestamp
-                        .map(|ts| {
-                            let datetime: chrono::DateTime<Local> = ts.into();
-                            datetime.format("%a %I:%M %p").to_string()
-                        })
-                        .unwrap_or_else(|| Local::now().format("%a %I:%M %p").to_string());
-
-                    Text::new(user_display_text.grey().to_string())
-                        .title(format!(" {timestamp_str} ").with(alt_color), Align::TopLeft)
+                    Text::new("")
+                        .title(timestamp, Align::TopLeft)
+                        .markdown(true)
                         .min_width(MIN_WIDTH)
-                        .border(BorderStyle::Rounded)
-                        .border_color(alt_color)
-                        .background(bg_color)
-                        .prefix_color(alt_color)
-                        .prefix_line(LineStyle::Solid)
-                        .bullet_color(brand_color)
-                        .code_color(brand_color)
-                        .padding(Padding::hor(1))
-                        .margin(Margin::default().bottom(1))
-                        .handler(async move |handle| {
-                            // Здесь передаем ответ ассистента в хэндлер
-                            if !asst_display_text.is_empty() {
-                                handle.update(asst_display_text);
-                            }
+                        .border_style(BorderStyle::Rounded)
+                        .border_color(border_c)
+                        .background_color(bg_color)
+                        .padding_hor(1)
+                        .margin_bottom(if is_user { 0 } else { 1 })
+                        .accent_color(brand_color)
+                        .handler(move |mut ctx| async move {
+                            *ctx.state = msg_text;
+                            ctx.finish();
                         })
                         .render()
                         .await?;
                 }
-            } else if !valid_messages.is_empty() {
-                // render notification badge showing loaded history message count
-                let info_msg = format!(
-                    "Loaded {} messages from history.",
-                    (valid_messages.len() / 2).max(1)
-                );
-                Text::new(info_msg.italic().grey().to_string())
-                    .min_width(MIN_WIDTH)
-                    .border(BorderStyle::Rounded)
-                    .border_color(brand_color)
-                    .background(bg_color)
-                    .prefix_color(alt_color)
-                    .padding(Padding::hor(1))
-                    .margin(Margin::default().bottom(1))
-                    .render()
-                    .await?;
+            } else {
+                let dialog_pairs = valid_messages.len() / 2;
+                if dialog_pairs > 0 {
+                    let info_text = format!(
+                        "Loaded {} previous dialog(s) in background.",
+                        dialog_pairs.to_string().with(brand_color)
+                    );
+
+                    Text::new("")
+                        .min_width(MIN_WIDTH)
+                        .border_style(BorderStyle::Rounded)
+                        .border_color(brand_color)
+                        .background_color(bg_color)
+                        .padding_hor(1)
+                        .margin_bottom(1)
+                        .accent_color(brand_color)
+                        .handler(move |mut ctx| async move {
+                            *ctx.state = info_text;
+                            ctx.notify();
+                            ctx.finish();
+                        })
+                        .render()
+                        .await?;
+                }
             }
         }
     }

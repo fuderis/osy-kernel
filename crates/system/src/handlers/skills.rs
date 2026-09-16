@@ -30,7 +30,7 @@ pub async fn handle_tool_call(
     Response::ok().stream(async move |tx| {
         if let Err(e) = skill.tool_call(tx.clone(), tool, payload.0).await {
             error!("{e}");
-            tx.send(Event::error(e.to_string())).ok();
+            tx.send(Event::Error(e.to_string())).ok();
         }
     })
 }

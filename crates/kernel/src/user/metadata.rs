@@ -1,29 +1,21 @@
 use crate::prelude::*;
 
-/// Global metadata persisted per user in `$share$/users/{uid}/userdata`
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// User metadata.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct UserMetadata {
-    /// List of all created session IDs for this user
+    /// All session IDs list.
     pub sessions: Vec<SessionId>,
-    /// The ID of the most recently active or created session
+    /// Last recently active session ID.
     pub last_session: Option<SessionId>,
 }
 
-/// The session metadata
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Session metadata.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
+    /// Session identifier.
     pub session_id: SessionId,
-    pub message_count: u64,
+    /// Total session messages count.
+    pub message_count: usize,
+    /// Point of the last compressed segment.
     pub compressed_until: usize,
-}
-
-impl SessionMetadata {
-    /// Creates a new session metadata by session id
-    pub fn new(session_id: SessionId) -> Self {
-        Self {
-            session_id,
-            message_count: 0,
-            compressed_until: 0,
-        }
-    }
 }

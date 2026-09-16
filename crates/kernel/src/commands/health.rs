@@ -1,49 +1,63 @@
-use super::*;
 use crate::prelude::*;
 
-use osy_share::{AgentMetadata, StatusData};
+use osy_share::{AgentMeta, StatusData};
+use rigging::{Stylize, widgets::Print};
 use tokio::process::Command;
 
-/// API: Handles the server refreshing (hot-reload)
+/// API: Handles server hot-reload.
 pub async fn handle_refresh() -> Result<()> {
-    let port = Settings::get().server.port;
+    let port = str!(Settings::get().server.port);
     let client = Client::tcp();
 
-    section("Refreshing Server");
+    Print::h1("Kernel Server:").render().await?;
 
-    let res = client
-        .get(&str!("http://127.0.0.1:{port}/refresh"))
+    // refreshing server
+    match client
+        .get(&format!("http://127.0.0.1:{port}/refresh"))
         .send()
-        .await;
-
-    match res {
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
-                info("Status", &str!("Online (port {port})").green().to_string());
+                Print::field("Status", str!("Online".green()))
+                    .field("Port", str!(port.green()))
+                    .render()
+                    .await?;
 
-                // successful response: we are parsing StatusData.
                 let _data: StatusData = response
                     .json()
                     .await
-                    .map_err(|e| str!("Failed to parse response: {e}"))?;
+                    .map_err(|e| format!("Failed to parse response: {e}"))?;
 
-                success("Settings synchronized.");
+                Print::success("Settings synchronized.")
+                    .margin_top(1)
+                    .render()
+                    .await?;
             } else {
-                // error 500 or another: read the error text from the body.
                 let err_msg = response
                     .text()
                     .await
-                    .unwrap_or_else(|_| "Unknown server error".to_string());
+                    .unwrap_or_else(|_| str!("Unknown server error"));
 
-                error(format!("Server error ({}): {err_msg}", status).into());
+                Print::error(format!("Server error ({}): {err_msg}", status))
+                    .margin_top(1)
+                    .render()
+                    .await?;
             }
         }
 
         Err(_) => {
-            info("Server status", &"Offline".red().to_string());
-            warn("Server is not responding. Check if it's running.");
-            return Err(str!("Server is offline").into());
+            Print::field("Server status", str!("Offline".red()))
+                .render()
+                .await?;
+
+            Print::warn("Server is not responding. Check if it's running.")
+                .margin_ver(1)
+                .render()
+                .await?;
+
+            return Err(Error::Custom("Server is offline".into()).into());
         }
     }
 
@@ -51,65 +65,75 @@ pub async fn handle_refresh() -> Result<()> {
     Ok(())
 }
 
-/// API: Handles the server status checking
+/// API: Handles server status checking.
 pub async fn handle_status() -> Result<()> {
-    let port = Settings::get().server.port;
+    let port = str!(Settings::get().server.port);
     let client = Client::tcp();
 
-    section("Checking Server");
+    Print::h1("Kernel Server:").render().await?;
 
-    // checking server:
-    let res = client
-        .get(&str!("http://127.0.0.1:{port}/status"))
+    // checking server
+    match client
+        .get(&format!("http://127.0.0.1:{port}/status"))
         .send()
-        .await;
-
-    match res {
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
-                info("Status", &str!("Online (port {port})").green().to_string());
+                Print::field("Status", str!("Online".green()))
+                    .field("Port", str!(port.green()))
+                    .render()
+                    .await?;
 
-                // successful response: we are parsing StatusData.
                 let data: StatusData = response
                     .json()
                     .await
-                    .map_err(|e| str!("Failed to parse response: {e}"))?;
+                    .map_err(|e| format!("Failed to parse response: {e}"))?;
 
-                info("Agents", "");
+                let mut agents = Print::field("Agents", "");
 
-                if data.agents_list.is_empty() {
-                    warn("No agents loaded");
-                } else {
-                    for AgentMetadata {
+                if !data.agents_list.is_empty() {
+                    for AgentMeta {
                         name, description, ..
                     } in data.agents_list
                     {
-                        item(&name, &description.trim());
+                        agents =
+                            agents.tree_item(format!("{} — {}", name.bold(), description.trim()));
                     }
+
+                    agents.render().await?;
+                } else {
+                    agents.tree_item("No agents loaded.").render().await?;
                 }
             } else {
-                // error 500 or another: read the error text from the body.
                 let err_msg = response
                     .text()
                     .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
+                    .unwrap_or_else(|_| str!("Failed to read error body"));
 
-                error(format!("Server error ({status}): {err_msg}").into());
+                Print::error(format!("Server error ({status}): {err_msg}"))
+                    .margin_top(1)
+                    .render()
+                    .await?;
             }
         }
         Err(_) => {
-            info("Status", &"Offline".red().to_string());
+            Print::field("Status", str!("Offline".red()))
+                .render()
+                .await?;
         }
     }
 
-    section("Checking LMS Server");
+    Print::h1("LM Studio Server:")
+        .margin_top(1)
+        .render()
+        .await?;
 
-    // checking LMS server:
-    let lms_out = Command::new("lms").args(["status"]).output().await;
-    let lms_raw = match lms_out {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-        _ => String::new(),
+    // checking LMS server
+    let lms_raw = match Command::new("lms").args(["status"]).output().await {
+        Ok(out) => str!(String::from_utf8_lossy(&out.stdout)),
+        _ => str!(),
     };
 
     let lms_running = lms_raw.contains("ON");
@@ -121,13 +145,14 @@ pub async fn handle_status() -> Result<()> {
         .unwrap_or("unknown");
 
     if lms_running {
-        info(
-            "Status",
-            &str!("Online (port {lms_port})").green().to_string(),
-        );
+        let fields = Print::new()
+            .field("Status", str!(format!("Online").green()))
+            .field("Port", str!(lms_port.green()));
 
         let mut in_models_block = false;
         let mut found_any = false;
+
+        let mut models = Print::new();
 
         for line in lms_raw.lines() {
             let line = line.trim();
@@ -137,37 +162,41 @@ pub async fn handle_status() -> Result<()> {
             }
 
             if in_models_block && line.starts_with('·') {
-                if !found_any {
-                    info("Models", "");
-                }
-
                 found_any = true;
                 let model_info = line.trim_start_matches('·').trim();
                 if let Some((name, size)) = model_info.split_once(" - ") {
                     let short = name.rsplit('/').next().unwrap_or(name);
-                    item("", &format!("{short} {}", size.dim()));
+                    models = models.tree_item(format!("{short} {}", size.dim()));
                 } else {
-                    item("", &model_info);
+                    models = models.tree_item(model_info);
                 }
             }
         }
-        if !found_any && in_models_block {
-            warn("No models currently loaded in LMS");
+
+        fields.field("Models", "").render().await?;
+
+        if !found_any {
+            models = models.tree_item("No models loaded.");
         }
+        models.render().await?;
     } else {
-        info("Status", &"Offline".red().to_string());
+        Print::field("Status", str!("Offline".red()))
+            .render()
+            .await?;
     }
 
     println!();
     Ok(())
 }
 
-/// API: Opens the config in the default editor
+/// API: Opens config in the default editor.
 pub async fn handle_config() -> Result<()> {
     let path = Settings::path();
 
-    section("Configuration");
-    info("Path", &path.display().to_string().white().to_string());
+    Print::h1("Configuration:").render().await?;
+    Print::field("Path", str!(path.to_string_lossy().magenta()))
+        .render()
+        .await?;
 
     #[cfg(target_os = "linux")]
     let opener = "xdg-open";
@@ -180,8 +209,19 @@ pub async fn handle_config() -> Result<()> {
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     match Command::new(opener).arg(&path).spawn() {
-        Ok(_) => success("Config file opened in default editor."),
-        Err(e) => error(str!("Failed to open config: {e}").into()),
+        Ok(_) => {
+            Print::success("Config file opened in default editor.")
+                .margin_top(1)
+                .render()
+                .await?
+        }
+
+        Err(e) => {
+            Print::error(format!("Failed to open config: {e}"))
+                .margin_top(1)
+                .render()
+                .await?
+        }
     }
 
     println!();
