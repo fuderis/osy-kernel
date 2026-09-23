@@ -55,27 +55,12 @@ TOOL AND RUNTIME USAGE RULES!:
 
 /// Default control query prompt.
 const CONTROL_PROMPT: &'static str = "\
-1. Review the latest user request and dialogue history.
-2. Evaluate executed tool/skill calls and determine the next step.
+The background tasks/tools have finished. Now write the FINAL response to the user.
 
-EVALUATION RULES:
-1. IF TASKS ARE COMPLETED:
-* Provide a concise, clear response informing the user of the final output.
-* Explain what was accomplished naturally (the user does NOT see raw logs).
-
-2. IF TASKS FAILED OR ARE INCOMPLETE:
-* Do NOT just report an error if it can be fixed!
-* Re-evaluate parameters/strategies and immediately call the required tool again.
-* Report a failure only if the error is unrecoverable.
-
-3. CONTEXT ISOLATION NOTICE:
-* Be aware that previous chat history is NOT visible to the user, as this task is executing in an isolated environment.
-* When responding or asking for clarification, do NOT refer to previous turns or past user responses as if the user remembers them.
-* Provide all essential context directly in your final response.
-
-CRITICAL REQUIREMENT:
-You MUST either call a tool/skill to continue execution OR yield a final text response to the user.
-An empty turn is strictly prohibited.\
+CRITICAL INSTRUCTIONS:
+1. The user CANNOT see tool outputs or background task logs. You must explicitly present all gathered results, findings, and data in your text answer.
+2. NEVER say \"as shown above\", \"already provided\", or refer to previous turns. Act as if you are delivering this information for the very first time.
+3. If tasks failed and can be retried with different parameters, call the tool again. Otherwise, deliver the final complete answer.\
 ";
 
 const TRANSLATE_PROMPT: &'static str = "\
