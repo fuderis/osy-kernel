@@ -1,7 +1,7 @@
 use crate::{
     manager::Manager,
     prelude::*,
-    skills,
+    skills::{self, EvalAction, TaskAction},
     user::{Session, UserState},
     utils,
 };
@@ -10,14 +10,14 @@ use anylm::{
     api::{Content, Message, Messages, Visibility},
     completions::{Chunk, Completions},
 };
+use atoman::task::JoinSet;
 use osy_share::{DialogEvent, Event, HandleQuery, Id};
 use pearce::Callback;
 use rigging::widgets::Confirmation;
-use tokio::task::JoinSet;
 
 /// API: User query handler.
 pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQuery>) -> Response {
-    let HandleQuery { message } = data.0;
+    let HandleQuery { message, .. } = data.0;
 
     Response::ok().stream(move |tx| async move {
         let result = match Session::read(sid).await {
@@ -36,7 +36,7 @@ pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQu
 
 /// Handles user query with direct parallel tool execution and self-healing.
 #[async_recursion]
-#[log(skip_all, fields(sid = %sid))]
+#[log(sid = %sid)]
 async fn handle_query(
     sid: SessionId,
     tx: Sender<Bytes>,
@@ -48,12 +48,12 @@ async fn handle_query(
 ) -> Result<()> {
     info!("Processing the user query (iteration {iteration})...");
 
-    let settings = Settings::get();
-    let completions_options = settings.completions.options.clone();
-    let exec_options = &settings.execution;
-    // let context_options = &settings.context;
+    let cfg = Config::get();
+    let provider_options = &cfg.completions.options;
+    let assist_prompt = &cfg.prompts.assist_prompt;
+    let exec_options = &cfg.execution;
 
-    // Цикл повтора ТЕКУЩЕЙ итерации при фатальной ошибке
+    // loop repeats the CURRENT iteration in case of an error
     'iteration_loop: loop {
         // 1. RAG: Search for relevant facts about the user and load Session Rules
         let session_guard = session.lock().await;
@@ -82,7 +82,7 @@ async fn handle_query(
             match {
                 let user = UserState::get_or_init(sid.user_id).await?;
                 let user_guard = user.read().await;
-                let limit = Settings::get().context.search_limit;
+                let limit = Config::get().context.search_limit;
                 user_guard.search_facts(&user_text, Some(limit)).await
             } {
                 Ok(facts) if !facts.is_empty() => {
@@ -99,7 +99,7 @@ async fn handle_query(
 
         // 2. Preparing the context and system prompts
         let raw_messages = messages.lock().await.messages.clone();
-        let base_system_prompt = utils::system_prompt(&session_guard.info, &settings);
+        let base_system_prompt = utils::system_prompt(&session_guard.info, &cfg);
         drop(session_guard);
 
         if !is_control {
@@ -111,9 +111,7 @@ async fn handle_query(
                 Message::system(vec![
                     format!("{base_system_prompt}\n\n---\n{rules_prompt}\n\n---\n{facts_prompt}")
                         .into(),
-                    settings
-                        .completions
-                        .assist_prompt
+                    assist_prompt
                         .replace("{AGENTS_LIST}", &Manager::agents_doc().await)
                         .into(),
                 ])
@@ -140,7 +138,7 @@ async fn handle_query(
                 return Err(Error::ConnectionClosed.into());
             }
 
-            let mut response = match Completions::try_from(completions_options.clone())?
+            let mut response = match Completions::try_from(provider_options.clone())?
                 .tools(Manager::basic_tools().await)
                 .send(messages.clone())
                 .await
@@ -166,7 +164,7 @@ async fn handle_query(
             };
 
             let mut chunk_error = None;
-            while let Some(chunk) = tokio::select! {
+            while let Some(chunk) = atoman::select! {
                 _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
                 chunk = response.next() => chunk,
             } {
@@ -176,7 +174,7 @@ async fn handle_query(
                         tx.send(Event::Answer(text_part))?;
                     }
                     Ok(Chunk::Tool(tool_call)) => match tool_call.func.name.as_ref() {
-                        "handle_task" => match tool_call.parse_args::<skills::task::TaskAction>() {
+                        "handle_task" => match tool_call.parse_args::<TaskAction>() {
                             Ok(mut task) => {
                                 task.tool_call_id = tool_call.id;
                                 agent_tasks.push(task);
@@ -187,7 +185,7 @@ async fn handle_query(
                                 break;
                             }
                         },
-                        "js_eval" => match tool_call.parse_args::<skills::eval::EvalAction>() {
+                        "js_eval" => match tool_call.parse_args::<EvalAction>() {
                             Ok(eval) => evals_list.push((tool_call.id, eval)),
                             Err(e) => {
                                 chunk_error = Some(format!("Failed to parse js_eval: {e}").into());
@@ -199,7 +197,7 @@ async fn handle_query(
                                 match {
                                     let user = UserState::get_or_init(sid.user_id).await?;
                                     let user_guard = user.read().await;
-                                    skills::fact::handle_remember_fact(&user_guard, act).await
+                                    skills::handle_remember_fact(&user_guard, act).await
                                 } {
                                     Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
                                     Err(e) => {
@@ -220,7 +218,7 @@ async fn handle_query(
                                 match {
                                     let user = UserState::get_or_init(sid.user_id).await?;
                                     let user_guard = user.read().await;
-                                    skills::fact::handle_search_fact(&user_guard, act).await
+                                    skills::handle_search_fact(&user_guard, act).await
                                 } {
                                     Ok(res_msg) => memory_results.push((tool_call.id, res_msg)),
                                     Err(e) => {
@@ -286,11 +284,11 @@ async fn handle_query(
             break Ok(());
         };
 
-        // Если планирование провалилось после всех retries:
+        // if planning has failed after all the retreats
         if let Err(e) = planning_res {
             tx.send(Event::Error(e.to_string())).ok();
             let prompt =
-                format!("Планирование завершилось с ошибкой: {e}. Хотите попробовать снова?");
+                format!("The planning failed with an error: {e}. Do you want to try again?");
             if ask_retry(&tx, prompt).await.unwrap_or(false) {
                 info!(
                     "User requested retry after planning error. Retrying iteration {iteration}..."
@@ -320,7 +318,7 @@ async fn handle_query(
                     "Executing JavaScript code: {:80}...",
                     &eval.code
                 )))?;
-                let result = skills::eval::handle_eval(eval).await?;
+                let result = skills::handle_eval(eval).await?;
                 results.push((tool_call_id, format!("JS Result:\n{result}").into()));
             }
 
@@ -345,13 +343,16 @@ async fn handle_query(
                 let tx = tx.clone();
 
                 workers.spawn(
-                    async move { skills::task::handle_task(tx, session, messages, task).await }
-                        .instrument(Span::current()),
+                    async move {
+                        skills::handle_task(tx, session.lock().await.info.clone(), messages, task)
+                            .await
+                    }
+                    .log_span(Span::current()),
                 );
             }
 
             loop {
-                tokio::select! {
+                atoman::select! {
                     _ = tx.closed() => {
                         warn!("Client disconnected, aborting agent execution");
                         workers.abort_all();
@@ -379,7 +380,7 @@ async fn handle_query(
         if let Some(err) = execution_error {
             tx.send(Event::Error(err.to_string())).ok();
             let prompt =
-                format!("Обработка задач завершилась с ошибкой: {err}. Хотите попробовать снова?");
+                format!("Task processing failed with an error: {err}. Do you want to try again?");
             if ask_retry(&tx, prompt).await.unwrap_or(false) {
                 info!("User requested retry after task error. Retrying iteration {iteration}...");
                 continue 'iteration_loop;
@@ -412,14 +413,13 @@ async fn handle_query(
                     "Sub-tasks finished. Launching control query (iteration {})...",
                     iteration + 1
                 );
-                let control_msg =
-                    Message::user(vec![settings.completions.control_prompt.as_str().into()])
-                        .visibility(Visibility::Internal);
+                let control_msg = Message::user(vec![cfg.prompts.control_prompt.as_str().into()])
+                    .visibility(Visibility::Internal);
 
                 handle_query(sid, tx, session, messages, control_msg, true, iteration + 1).await?;
             }
         } else {
-            // Если это был контрольный запрос ИЛИ действий не было (прямой ответ пользователю)
+            // if control request OR no actions (direct response to the user)
             tx.send(Event::Finish)?;
             info!("Query processing finished completely.");
 
@@ -450,7 +450,7 @@ async fn ask_retry(tx: &Sender<Bytes>, prompt: String) -> Result<bool> {
         default: Some(Confirmation::Yes),
     }))?;
 
-    let response = tokio::select! {
+    let response = atoman::select! {
         _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
         res = callback.recv::<bool>(Duration::from_secs(300)) => res,
     };

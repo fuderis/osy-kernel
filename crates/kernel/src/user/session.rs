@@ -31,7 +31,7 @@ pub struct Session {
 
 impl Session {
     /// Reads user session from database.
-    #[log(skip_all, fields(sid = %sid))]
+    #[log(sid = %sid)]
     pub async fn read(sid: SessionId) -> Result<(Arc<Mutex<Session>>, Arc<Mutex<Messages>>)> {
         info!("[Session] Reading user session `{sid}`...");
 
@@ -39,13 +39,13 @@ impl Session {
             return Err(Error::UnknownSessionId(sid).into());
         };
         let db_messages = session.lock().await.read_messages().await?;
-        let messages = arc_mutex!(Messages::from(db_messages));
+        let messages = Arc::new(Mutex::new(Messages::from(db_messages)));
 
         Ok((session, messages))
     }
 
     /// Initializes user session.
-    #[log(skip_all, fields(sid = %sid))]
+    #[log(sid = %sid)]
     pub async fn init(sid: SessionId, info: SessionInfo) -> Result<SharedSession> {
         info!("[Session] Initializing session `{sid}`...");
 
@@ -92,13 +92,20 @@ impl Session {
     }
 
     /// Finishes user session, flushes and cleans up memory.
-    #[log(skip_all, fields(sid = %sid))]
+    /// If session belongs to temporary user (uid == 0), completely purges it from disk.
+    #[log(sid = %sid)]
     pub async fn finish(sid: &SessionId) -> Result<()> {
         info!("[Session] Initiating session completion `{sid}`...");
 
         let uid = sid.user_id as u64;
 
-        // remove session at user state
+        // Если это приватный/тестовый пользователь (uid == 0) — стираем полностью
+        if uid == 0 {
+            info!("[Session] Ephemeral user detected (uid=0). Purging session files.");
+            return Self::remove(sid).await;
+        }
+
+        // Remove session at user state
         let (removed_session, is_empty) = {
             if let Ok(user) = UserState::get_or_init(uid).await {
                 let mut user_guard = user.write().await;
@@ -112,7 +119,7 @@ impl Session {
             }
         };
 
-        // flush unsaved changes to database
+        // Flush unsaved changes to database
         if let Some(session) = removed_session {
             let session_guard = session.lock().await;
 
@@ -121,7 +128,7 @@ impl Session {
             table.flush().await?;
         }
 
-        // if no more active sessions - clean up user's state from memory
+        // If no more active sessions - clean up user's state from memory
         if is_empty {
             if let Ok(user) = UserState::get_or_init(uid).await {
                 let user_guard = user.read().await;
@@ -136,11 +143,75 @@ impl Session {
 
         Ok(())
     }
+
+    /// Completely removes user session from memory AND disk.
+    #[log(sid = %sid)]
+    pub async fn remove(sid: &SessionId) -> Result<()> {
+        info!("[Session] Initiating full session removal `{sid}`...");
+
+        let uid = sid.user_id as u64;
+
+        // 1. Удаляем сессию из UserState в памяти и чистим её ID из метаданных
+        let (removed_session, is_empty) = {
+            if let Ok(user) = UserState::get_or_init(uid).await {
+                let mut user_guard = user.write().await;
+
+                let session = user_guard.sessions.remove(sid);
+                let empty = user_guard.sessions.is_empty();
+
+                if let Ok(Some(mut user_meta)) = user_guard.load_metadata().await {
+                    user_meta.sessions.retain(|s| s != sid);
+                    if user_meta.last_session == Some(*sid) {
+                        user_meta.last_session = user_guard.sessions.keys().next().copied();
+                    }
+                    user_guard.save_metadata(&user_meta).await.ok();
+                }
+
+                (session, empty)
+            } else {
+                (None, false)
+            }
+        };
+
+        // 2. Флашим таблицы сессии и сбрасываем Lock/Guard перед удалением файлов
+        if let Some(session) = removed_session {
+            let session_guard = session.lock().await;
+            let table_name = str!(sid);
+            if let Ok(table) = session_guard.kv_db.open_table(&table_name).await {
+                table.flush().await.ok();
+            }
+            drop(session_guard);
+        }
+
+        // 3. Удаляем ИСКЛЮЧИТЕЛЬНО папку этой конкретной сессии
+        let session_dir = path!("$share$/users/{uid}/sessions/{sid}");
+        if atoman::fs::metadata(&session_dir).await.is_ok() {
+            if let Err(e) = atoman::fs::remove_dir_all(&session_dir).await {
+                error!("[Session] Failed to remove session directory `{session_dir:?}`: {e}");
+            }
+        }
+
+        // 4. Освобождаем UserState из RAM, если активных сессий в памяти не осталось
+        // Корневую директорию пользователя ($share$/users/{uid}) НЕ ТРОГАЕМ.
+        if is_empty {
+            if let Ok(user) = UserState::get_or_init(uid).await {
+                let user_guard = user.read().await;
+                if user_guard.sessions.is_empty() {
+                    drop(user_guard);
+                    USER_STATES.remove(&uid).await;
+                }
+            }
+        }
+
+        info!("[Session] Session `{sid}` removed completely.");
+
+        Ok(())
+    }
 }
 
 impl Session {
     /// Reads session metadata.
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn read_metadata(&self) -> Result<Option<SessionMetadata>> {
         info!("[Session] Reading session metadata...");
 
@@ -151,14 +222,13 @@ impl Session {
     }
 
     /// Reads session messages.
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn read_messages(&self) -> Result<Vec<Message>> {
         info!("[Session] Reading session messages...");
 
         let table_name = str!(self.id);
         let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata or create default
         let meta = match table.read(Key::Metadata).await? {
             Some(meta) => meta,
             None => {
@@ -172,11 +242,9 @@ impl Session {
             }
         };
 
-        // get precerved messages range
         let start_idx = meta.compressed_until;
         let end_idx = meta.message_count as usize;
 
-        // read messages one by one
         let mut messages = Vec::with_capacity(end_idx.saturating_sub(start_idx));
         for i in start_idx..end_idx {
             let msg_key = Key::Message(i);
@@ -189,26 +257,23 @@ impl Session {
     }
 
     /// Writes new message to session.
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn write_message(&self, message: Message) -> Result<()> {
         info!("[Session] Writing new session message...");
 
         let table_name = str!(self.id);
         let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata or create default
         let mut meta: SessionMetadata =
             table.read(Key::Metadata).await?.unwrap_or(SessionMetadata {
                 session_id: self.id,
                 ..Default::default()
             });
 
-        // write message to database
         let msg_key = Key::Message(meta.message_count as usize);
         table.write(msg_key, message).await?;
         meta.message_count += 1;
 
-        // update session metadata
         table.write(Key::Metadata, meta).await?;
         table.flush().await?;
 
@@ -216,28 +281,25 @@ impl Session {
     }
 
     /// Writes new messages to sessions (multiple).
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn write_messages(&self, messages: Vec<Message>) -> Result<()> {
         info!("[Session] Writing new session messages...");
 
         let table_name = str!(self.id);
         let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata or create default
         let mut meta: SessionMetadata =
             table.read(Key::Metadata).await?.unwrap_or(SessionMetadata {
                 session_id: self.id,
                 ..Default::default()
             });
 
-        // write new messages to database
         for message in messages {
             let msg_key = Key::Message(meta.message_count as usize);
             table.write(msg_key, message).await?;
             meta.message_count += 1;
         }
 
-        // update session metadata
         table.write(Key::Metadata, meta).await?;
         table.flush().await?;
 
@@ -254,7 +316,6 @@ impl Session {
         let table_name = str!(self.id);
         let table = self.kv_db.open_table(&table_name).await?;
 
-        // read metadata or create default
         let current_meta = table
             .read::<_, SessionMetadata>(Key::Metadata)
             .await?
@@ -263,7 +324,6 @@ impl Session {
                 ..Default::default()
             });
 
-        // write compressed message and shift preserved messages
         let insert_idx = current_meta.compressed_until + compress_count;
         let mut current_idx = insert_idx;
 
@@ -277,7 +337,6 @@ impl Session {
             current_idx += 1;
         }
 
-        // update session metadata
         let new_message_count = std::cmp::max(current_meta.message_count, current_idx);
         let new_meta = SessionMetadata {
             session_id: self.id,
@@ -292,27 +351,24 @@ impl Session {
     }
 
     /// Clears session data.
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn clear(&self) -> Result<()> {
         info!("[Session] Clearing message history...");
 
         let table_name = str!(self.id);
         let table = self.kv_db.open_table(&table_name).await?;
 
-        // remove all messages
         if let Some(meta) = table.read::<_, SessionMetadata>(Key::Metadata).await? {
             for i in 0..meta.message_count {
                 table.remove(Key::Message(i)).await?;
             }
         }
 
-        // reset session metadata
         let fresh_meta = SessionMetadata {
             session_id: self.id,
             ..Default::default()
         };
 
-        // update session metadata
         table.write(Key::Metadata, fresh_meta).await?;
         table.flush().await?;
 
@@ -331,13 +387,11 @@ impl Session {
         is_global: bool,
     ) -> Result<UserRule> {
         if is_global {
-            // save global rule
             let user = UserState::get_or_init(self.user_id).await?;
             let user_guard = user.read().await;
 
             user_guard.save_rule(id, text).await
         } else {
-            // save local rule
             let rule_id = id.unwrap_or_else(gen_id);
             let rule = UserRule {
                 id: rule_id,
@@ -346,7 +400,6 @@ impl Session {
                 created_at: Utc::now(),
             };
 
-            // write to session database
             let table = self.kv_db.open_table(RULES_TABLE_NAME).await?;
             table.write(rule_id, rule.clone()).await?;
             table.flush().await?;
@@ -386,13 +439,11 @@ impl Session {
 
     /// Loads all user's rules (global + local).
     pub async fn load_rules(&self) -> Result<Vec<UserRule>> {
-        // read global rules
         let user = UserState::get_or_init(self.user_id).await?;
         let user_guard = user.read().await;
 
         let mut rules = user_guard.load_rules().await?;
 
-        // read local rules
         let local_table = self.kv_db.open_table(RULES_TABLE_NAME).await?;
         if let Ok(local_rules) = local_table.read_all::<u64, UserRule>().await {
             rules.extend(local_rules.into_iter().map(|r| r.1));
@@ -421,7 +472,7 @@ impl Session {
 
 impl Session {
     /// Duplicates session with all messages & local rules.
-    #[log(skip_all, fields(sid = %self.id))]
+    #[log(sid = %self.id)]
     pub async fn duplicate(&self) -> Result<SessionId> {
         info!("[Session] Cloning session...");
 

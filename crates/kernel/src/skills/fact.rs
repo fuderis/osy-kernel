@@ -40,7 +40,7 @@ pub fn tools_list() -> Vec<Tool> {
 // --- Action Payload Deserializers ---
 
 /// Saves new fact to the user's vector storage.
-#[log(skip_all, fields(uid = %user.id))]
+#[log(uid = %user.id)]
 pub async fn handle_remember_fact(user: &UserState, data: SetQuery) -> Result<String> {
     let SetQuery { text, .. } = data;
 
@@ -55,7 +55,7 @@ pub async fn handle_remember_fact(user: &UserState, data: SetQuery) -> Result<St
 }
 
 /// Searches for relevant user facts.
-#[log(skip_all, fields(uid = %user.id))]
+#[log(uid = %user.id)]
 pub async fn handle_search_fact(user: &UserState, data: SearchQuery) -> Result<String> {
     let SearchQuery { query, limit } = data;
 

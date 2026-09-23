@@ -82,7 +82,7 @@ impl Task {
                 let tx = self.tx.clone();
                 let tasks = self.tasks.clone();
 
-                tokio::spawn(async move {
+                atoman::spawn(async move {
                     crate::handlers::query::handle_task(task.id, tx, tasks).await;
                 });
             }

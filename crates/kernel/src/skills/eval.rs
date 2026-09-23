@@ -27,7 +27,7 @@ pub struct EvalAction {
 }
 
 /// Handles JavaScript execution.
-#[log(skip_all)]
+#[log()]
 pub async fn handle_eval(action: EvalAction) -> Result<String> {
     info!("Executing JavaScript code: {:80}...", &action.code);
 

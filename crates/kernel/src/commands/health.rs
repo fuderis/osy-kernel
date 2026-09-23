@@ -1,12 +1,12 @@
 use crate::prelude::*;
 
+use atoman::process::Command;
 use osy_share::{AgentMeta, StatusData};
 use rigging::{Stylize, widgets::Print};
-use tokio::process::Command;
 
 /// API: Handles server hot-reload.
-pub async fn handle_refresh() -> Result<()> {
-    let port = str!(Settings::get().server.port);
+pub async fn handle_health_refresh() -> Result<()> {
+    let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
     Print::h1("Kernel Server:").render().await?;
@@ -66,8 +66,8 @@ pub async fn handle_refresh() -> Result<()> {
 }
 
 /// API: Handles server status checking.
-pub async fn handle_status() -> Result<()> {
-    let port = str!(Settings::get().server.port);
+pub async fn handle_health_status() -> Result<()> {
+    let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
     Print::h1("Kernel Server:").render().await?;
@@ -125,73 +125,13 @@ pub async fn handle_status() -> Result<()> {
         }
     }
 
-    Print::h1("LM Studio Server:")
-        .margin_top(1)
-        .render()
-        .await?;
-
-    // checking LMS server
-    let lms_raw = match Command::new("lms").args(["status"]).output().await {
-        Ok(out) => str!(String::from_utf8_lossy(&out.stdout)),
-        _ => str!(),
-    };
-
-    let lms_running = lms_raw.contains("ON");
-    let lms_port = lms_raw
-        .lines()
-        .find(|l| l.contains("port:"))
-        .and_then(|l| l.split("port:").last())
-        .map(|p| p.trim_matches(|c: char| !c.is_numeric()))
-        .unwrap_or("unknown");
-
-    if lms_running {
-        let fields = Print::new()
-            .field("Status", str!(format!("Online").green()))
-            .field("Port", str!(lms_port.green()));
-
-        let mut in_models_block = false;
-        let mut found_any = false;
-
-        let mut models = Print::new();
-
-        for line in lms_raw.lines() {
-            let line = line.trim();
-            if line.contains("Models") {
-                in_models_block = true;
-                continue;
-            }
-
-            if in_models_block && line.starts_with('·') {
-                found_any = true;
-                let model_info = line.trim_start_matches('·').trim();
-                if let Some((name, size)) = model_info.split_once(" - ") {
-                    let short = name.rsplit('/').next().unwrap_or(name);
-                    models = models.tree_item(format!("{short} {}", size.dim()));
-                } else {
-                    models = models.tree_item(model_info);
-                }
-            }
-        }
-
-        fields.field("Models", "").render().await?;
-
-        if !found_any {
-            models = models.tree_item("No models loaded.");
-        }
-        models.render().await?;
-    } else {
-        Print::field("Status", str!("Offline".red()))
-            .render()
-            .await?;
-    }
-
     println!();
     Ok(())
 }
 
 /// API: Opens config in the default editor.
-pub async fn handle_config() -> Result<()> {
-    let path = Settings::path();
+pub async fn handle_health_config() -> Result<()> {
+    let path = Config::path();
 
     Print::h1("Configuration:").render().await?;
     Print::field("Path", str!(path.to_string_lossy().magenta()))

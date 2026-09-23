@@ -12,6 +12,12 @@ pub use prompt::*;
 pub mod sudo;
 pub use sudo::*;
 
+pub mod cli;
+pub use cli::*;
+
+pub mod args;
+pub use args::*;
+
 use crate::prelude::*;
 use chrono::FixedOffset;
 

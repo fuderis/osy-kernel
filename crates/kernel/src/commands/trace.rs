@@ -20,7 +20,7 @@ struct AgentMeta {
 
 /// Streams server logs.
 pub async fn handle_trace(uid_filter: Option<u64>, only_new: bool) -> Result<()> {
-    let settings = Settings::get();
+    let settings = Config::get();
     let port = settings.server.port;
     let base_url = format!("http://127.0.0.1:{port}");
 

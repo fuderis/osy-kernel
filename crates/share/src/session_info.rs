@@ -11,3 +11,13 @@ pub struct SessionInfo {
     /// Client timezone (offset in minutes).
     pub timezone: i16,
 }
+
+impl Default for SessionInfo {
+    fn default() -> Self {
+        Self {
+            system_info: None,
+            current_path: None,
+            timezone: 180,
+        }
+    }
+}

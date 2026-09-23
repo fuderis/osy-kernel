@@ -35,8 +35,8 @@ impl SudoGuard {
         let running_clone = Arc::clone(&running);
 
         // 3. Launching background timestamp update task
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
+        atoman::spawn(async move {
+            let mut interval = atoman::time::interval(Duration::from_secs(60));
             interval.tick().await;
 
             while running_clone.load(Ordering::Relaxed) {
@@ -46,7 +46,7 @@ impl SudoGuard {
                     break;
                 }
 
-                let _ = tokio::process::Command::new("sudo")
+                let _ = atoman::process::Command::new("sudo")
                     .arg("-n")
                     .arg("-v")
                     .status()

@@ -1,18 +1,18 @@
 use super::{MANAGER, Manager};
 use crate::prelude::*;
 
+use atoman::{
+    net::UnixStream,
+    process::{Child, Command},
+    sync::Mutex,
+    time,
+};
 use osy_share::AgentMeta;
 use pearce::Client;
 use std::{
     process::Stdio,
     sync::Arc,
     time::{Duration, SystemTime},
-};
-use tokio::{
-    net::UnixStream,
-    process::{Child, Command},
-    sync::Mutex,
-    time,
 };
 
 /// Agent instance.
@@ -31,7 +31,7 @@ pub struct Agent {
 
 impl Agent {
     /// Runs agent server.
-    #[log(skip_all)]
+    #[log()]
     pub async fn run(exec_path: impl Into<PathBuf>) -> Result<()> {
         let exec_path = exec_path.into();
         info!("[Manager] Starting agent `{}`...", exec_path.display());
@@ -113,7 +113,7 @@ impl Agent {
             exec_path,
             metadata,
             _started: Some(SystemTime::now()),
-            _child: arc_mutex!(Some(child)),
+            _child: Arc::new(Mutex::new(Some(child))),
         };
 
         // register in manager
@@ -127,7 +127,7 @@ impl Agent {
     }
 
     /// Stops agent server.
-    #[log(skip_all)]
+    #[log()]
     pub async fn stop(&self) -> Result<()> {
         let name = &self.metadata.name;
         info!("[Manager] Trying to stop `{name}` agent...");
@@ -143,7 +143,7 @@ impl Agent {
     }
 
     /// Returns true if agent is outdated.
-    #[log(skip_all)]
+    #[log()]
     pub async fn check(&self, deep_check: bool) -> Result<bool> {
         // check socket connection
         let is_alive = time::timeout(
@@ -160,7 +160,7 @@ impl Agent {
 
         // check execution file metadata
         if deep_check {
-            let metadata = tokio::fs::metadata(&self.exec_path).await?;
+            let metadata = atoman::fs::metadata(&self.exec_path).await?;
 
             if let Ok(modified_at) = metadata.modified()
                 && let Some(started_at) = self._started
@@ -174,7 +174,7 @@ impl Agent {
 
     /// Ensures the agent is running
     /// (returns true if ready for queries)
-    #[log(skip_all)]
+    #[log()]
     pub async fn ensure(&self) -> Result<()> {
         let name = &self.metadata.name;
         let exec_path = &self.exec_path;

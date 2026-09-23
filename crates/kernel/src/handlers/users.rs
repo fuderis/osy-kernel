@@ -15,9 +15,9 @@ macro_rules! get_user {
 }
 
 /// API: Handles user sessions list.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
-    let count = data.0.count.unwrap_or(0);
+#[log(uid = %*uid)]
+pub async fn handle_user_sessions_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
+    let count = payload.0.count.unwrap_or(0);
 
     match UserState::list_sessions(*uid, count).await {
         Ok(sessions) => Response::ok().json(&sessions),
@@ -29,14 +29,14 @@ pub async fn handle_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
 }
 
 /// API: Lists all user facts stored in RAG memory.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_facts_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
+#[log(uid = %*uid)]
+pub async fn handle_user_facts_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
     match user_guard.load_facts().await {
         Ok(mut facts) => Response::ok().json({
-            if let Some(count) = data.0.count {
+            if let Some(count) = payload.0.count {
                 facts.truncate(count);
             };
             &facts
@@ -49,9 +49,9 @@ pub async fn handle_facts_list(uid: Paths<u64>, data: Json<ListQuery>) -> Respon
 }
 
 /// API: Vector search across user facts.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_facts_search(uid: Paths<u64>, data: Json<SearchQuery>) -> Response {
-    let SearchQuery { query, limit } = data.0;
+#[log(uid = %*uid)]
+pub async fn handle_user_facts_search(uid: Paths<u64>, payload: Json<SearchQuery>) -> Response {
+    let SearchQuery { query, limit } = payload.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -69,9 +69,9 @@ pub async fn handle_facts_search(uid: Paths<u64>, data: Json<SearchQuery>) -> Re
 }
 
 /// Adds or updates user fact in RAG memory.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_facts_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response {
-    let SetQuery { id, text } = data.0;
+#[log(uid = %*uid)]
+pub async fn handle_user_facts_set(uid: Paths<u64>, payload: Json<SetQuery>) -> Response {
+    let SetQuery { id, text } = payload.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -97,23 +97,25 @@ pub async fn handle_facts_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
 }
 
 /// API: Removes fact by its ID.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_facts_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Response {
+#[log(uid = %*uid)]
+pub async fn handle_user_facts_remove(uid: Paths<u64>, payload: Json<RemoveQuery>) -> Response {
+    let RemoveQuery { id } = payload.0;
+
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
-    match user_guard.remove_fact(data.id).await {
+    match user_guard.remove_fact(id).await {
         Ok(_) => Response::ok().text("Fact removed successfully"),
         Err(e) => {
-            error!("Failed to remove fact {} for user {}: {e}", data.id, *uid);
+            error!("Failed to remove fact {id} for user {}: {e}", *uid);
             Response::error().text(e.to_string())
         }
     }
 }
 
 /// API: Clears all user's facts.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_facts_clear(uid: Paths<u64>) -> Response {
+#[log(uid = %*uid)]
+pub async fn handle_user_facts_clear(uid: Paths<u64>) -> Response {
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
@@ -127,14 +129,16 @@ pub async fn handle_facts_clear(uid: Paths<u64>) -> Response {
 }
 
 /// API: Lists global rules for the specified user.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_rules_list(uid: Paths<u64>, data: Json<ListQuery>) -> Response {
+#[log(uid = %*uid)]
+pub async fn handle_user_rules_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
+    let ListQuery { count } = payload.0;
+
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
     match user_guard.load_rules().await {
         Ok(mut rules) => Response::ok().json({
-            if let Some(count) = data.count {
+            if let Some(count) = count {
                 rules.truncate(count);
             };
             &rules
@@ -147,9 +151,9 @@ pub async fn handle_rules_list(uid: Paths<u64>, data: Json<ListQuery>) -> Respon
 }
 
 /// API: Adds or updates a global user rule.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_rules_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response {
-    let SetQuery { id, text } = data.0;
+#[log(uid = %*uid)]
+pub async fn handle_user_rules_set(uid: Paths<u64>, payload: Json<SetQuery>) -> Response {
+    let SetQuery { id, text } = payload.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -165,26 +169,26 @@ pub async fn handle_rules_set(uid: Paths<u64>, data: Json<SetQuery>) -> Response
 }
 
 /// API: Removes a global user rule by ID.
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_rules_remove(uid: Paths<u64>, data: Json<RemoveQuery>) -> Response {
-    let rule_id = data.id;
+#[log(uid = %*uid)]
+pub async fn handle_user_rules_remove(uid: Paths<u64>, payload: Json<RemoveQuery>) -> Response {
+    let RemoveQuery { id } = payload.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
-    match user_guard.remove_rule(rule_id).await {
+    match user_guard.remove_rule(id).await {
         Ok(true) => Response::ok().text("Global rule removed successfully"),
-        Ok(false) => Response::error().text(format!("Rule `{rule_id}` not found")),
+        Ok(false) => Response::error().text(format!("Rule `{id}` not found")),
         Err(e) => {
-            error!("Failed to remove rule `{rule_id}` for user {}: {e}", *uid);
+            error!("Failed to remove rule `{id}` for user {}: {e}", *uid);
             Response::error().text(e.to_string())
         }
     }
 }
 
 /// API: Clears all global rules for the user
-#[log(skip_all, fields(uid = %*uid))]
-pub async fn handle_rules_clear(uid: Paths<u64>) -> Response {
+#[log(uid = %*uid)]
+pub async fn handle_user_rules_clear(uid: Paths<u64>) -> Response {
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 

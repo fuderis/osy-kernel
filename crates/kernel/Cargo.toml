@@ -16,7 +16,7 @@
 [package]
 name = "osy"
 description = "Ultra-Fast AI Kernel (experimental)"
-version = "0.21.0"
+version = "0.22.0"
 edition = "2024"
 
 [dependencies]
@@ -27,11 +27,9 @@ rigging.workspace = true
 pearce.workspace = true
 anylm.workspace = true
 cistern.workspace = true
-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
-tracing.workspace = true
 boa_engine.workspace = true
 libc.workspace = true
 rand.workspace = true

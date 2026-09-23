@@ -13,12 +13,11 @@ pub fn session_info() -> SessionInfo {
 }
 
 /// Generates the base system prompt
-pub fn system_prompt(info: &SessionInfo, settings: &Settings) -> String {
+pub fn system_prompt(info: &SessionInfo, cfg: &Config) -> String {
     let now_utc = Utc::now();
     let now_local = utils::now_local(info.timezone);
 
-    settings
-        .completions
+    cfg.prompts
         .system_prompt
         .trim()
         .replace(

@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-use anylm::{api::ApiKind, options::Options};
+use anylm::options::Options;
 use rigging::Color;
 
 /// Default system prompt.
@@ -67,6 +67,11 @@ EVALUATION RULES:
 * Do NOT just report an error if it can be fixed!
 * Re-evaluate parameters/strategies and immediately call the required tool again.
 * Report a failure only if the error is unrecoverable.
+
+3. CONTEXT ISOLATION NOTICE:
+* Be aware that previous chat history is NOT visible to the user, as this task is executing in an isolated environment.
+* When responding or asking for clarification, do NOT refer to previous turns or past user responses as if the user remembers them.
+* Provide all essential context directly in your final response.
 
 CRITICAL REQUIREMENT:
 You MUST either call a tool/skill to continue execution OR yield a final text response to the user.
@@ -199,9 +204,9 @@ impl Default for RuntimeOptions {
     }
 }
 
-/// Main completions pipeline options
+/// LLM prompts list.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompletionsOptions {
+pub struct PromptsOptions {
     /// Base system prompt template.
     pub system_prompt: String,
     /// Primary assistant role and behavior prompt.
@@ -213,62 +218,63 @@ pub struct CompletionsOptions {
     /// Prompt for normalize text before embeddings save.
     pub normalize_prompt: String,
     /// Prompt used for summarizing and compressing context.
-    pub compression_prompt: String,
-
-    /// Model and provider parameters for completions.
-    pub options: Options,
+    pub compress_prompt: String,
 }
 
-impl Default for CompletionsOptions {
+impl Default for PromptsOptions {
     fn default() -> Self {
-        let mut options = Options::default();
-        options.kind = ApiKind::OpenAi;
-        options.base_url = Some("http://127.0.0.1:1234".into());
-        options.model = "qwen3-vl-4b".into();
-        options.temperature.replace(0.8);
-        options.max_tokens.replace(16_384);
-
         Self {
             system_prompt: SYSTEM_PROMPT.trim().into(),
             assist_prompt: ASSISTANT_PROMPT.trim().into(),
             translate_prompt: TRANSLATE_PROMPT.trim().into(),
             normalize_prompt: NORMALIZE_PROMPT.trim().into(),
             control_prompt: CONTROL_PROMPT.trim().into(),
-            compression_prompt: COMPRESSION_PROMPT.trim().into(),
-
-            options,
+            compress_prompt: COMPRESSION_PROMPT.trim().into(),
         }
     }
 }
 
-/// Context compression pipeline options.
+/// LLM completions options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompressionOptions {
-    /// Model and provider parameters for compression.
-    pub options: Option<Options>,
+pub struct CompletionsOptions {
+    /// Agent LLM temperature.
+    pub skill_temp: f32,
+    /// Compession LLM temperature.
+    pub compress_temp: f32,
+    /// LLM provider options.
+    pub options: Options,
 }
 
-impl Default for CompressionOptions {
+impl Default for CompletionsOptions {
     fn default() -> Self {
-        Self { options: None }
+        Self {
+            skill_temp: 0.2,
+            compress_temp: 0.4,
+            options: Options::openai()
+                .env_var("ROUTERAI_API_KEY")
+                .base_url("https://routerai.ru/api")
+                .model("qwen/qwen3-coder-next")
+                .max_tokens(16384)
+                .temperature(0.6),
+        }
     }
 }
 
 /// Text embeddings pipeline options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmbeddingsOptions {
-    /// Model and provider parameters for embeddings.
+    /// LLM provider options.
     pub options: Options,
 }
 
 impl Default for EmbeddingsOptions {
     fn default() -> Self {
-        let mut options = Options::default();
-        options.kind = ApiKind::OpenAi;
-        options.base_url = Some("http://127.0.0.1:1234".into());
-        options.model = "text-embedding-nomic-embed-text-v1.5@q8_0".into();
-
-        Self { options }
+        Self {
+            options: Options::openai()
+                .env_var("ROUTERAI_API_KEY")
+                .base_url("https://routerai.ru/api")
+                .model("perplexity/pplx-embed-v1-0.6b"),
+        }
     }
 }
 
@@ -311,10 +317,10 @@ impl Default for CacheOptions {
     }
 }
 
-/// Kernel settings.
+/// Kernel config.
 #[atoman::config]
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub struct Settings {
+pub struct Config {
     /// TUI/GUI theme options.
     pub theme: ThemeOptions,
     /// Server infrastructure settings.
@@ -323,10 +329,10 @@ pub struct Settings {
     pub execution: ExecutionOptions,
     /// JavaScript runtime options.
     pub runtime: RuntimeOptions,
+    /// LLM prompts options.
+    pub prompts: PromptsOptions,
     /// Main completions pipeline options.
     pub completions: CompletionsOptions,
-    /// Context compression pipeline options.
-    pub compression: CompressionOptions,
     /// Text embeddings pipeline options.
     pub embeddings: EmbeddingsOptions,
     /// RAG memory and context settings.

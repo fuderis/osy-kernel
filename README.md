@@ -5,29 +5,37 @@
 <h1 align="center">Osy Kernel</h1>
 <p align="center">
   <strong>Deterministic, Token-Efficient Engine for Next-Gen AI Assistants</strong><br>
-  <code>lightweight</code> • <code>token-optimized</code> • <code>process-isolated</code> • <code>ultra-fast</code>
+  <code>microservice-architecture</code> • <code>process-isolated</code> • <code>token-optimized</code> • <code>ultra-fast</code>
 </p>
 
 <img src="https://raw.githubusercontent.com/fuderis/osy-kernel/main/assets/cover.png" alt="Cover" width="100%" />
 
-**Osy** is an open-source, high-performance orchestration kernel written in Rust. It is built for deploying ultra-lightweight, secure, and fully predictable personal and enterprise-grade AI assistants.
+**Osy** is an open-source, high-performance orchestration kernel written in Rust. It brings Unix philosophy and microservice isolation to LLM agents — treating skills as lightweight, atomic CLI-like utilities operating over lightning-fast IPC.
 
-Modern agentic frameworks often suffer from uncontrolled agent autonomy, runaway token usage, and context leaks. Osy solves these issues at a deep system level: agents are isolated at the process level, system calls are purged from dialogue history, and memory operates in a hybrid mode.
+Traditional agentic frameworks often suffer from uncontrolled agent autonomy, runaway token usage, and context pollution. Osy solves these issues at a systems level: orchestration happens in a pure chat loop, agent tasks run in isolated processes with zero access to the user context, and only clean final outputs are fed back to the orchestrator.
 
-> ⚠️ **EXPERIMENTAL:** **Osy** is undergoing rapid architectural evolution, experimental testing, and active refinement:
-> * **Resource Usage & Storage Overhead:** Embedded storage drivers (LanceDB & Sled) currently run directly inside the kernel runtime and can consume significant RAM/I/O under heavy loads. API abstraction layers for external database backends (e.g., remote vector/KV servers) are actively planned for future optimization.
-> * **Architectural Volatility:** Interfaces, memory formats, and IPC contracts are frequently refactored as we experiment with novel prompt-processing techniques and execution pipelines. API stability and production reliability are not guaranteed between commits.
+> ⚠️ **EXPERIMENTAL:** Osy is under active evolution with rapid refactoring of IPC contracts and internal pipelines.
+> 
+> **Storage & RAM Warning:** Embedded databases (LanceDB & Sled) run directly inside the kernel process and may consume significant RAM and I/O under heavy workloads. External DB driver abstractions are planned for future releases.
 
 ---
 
 ## Key Features
 
-* **Extreme Context Optimization (Token Scrubbing):** Intermediate tool calls and service context are isolated and automatically purged from the active session history. You pay only for the final useful answers.
-* **Full Determinism (Star Topology):** Agents act as strict executors with no permission to communicate unauthorized with one another or enter infinite recursive loops. All planning and context control are strictly managed by the Kernel.
-* **Smart Hybrid Memory (RAG + Context Injection):** Automatic pre-fetching of relevant facts/embeddings before sending requests to the LLM, plus the model's ability to explicitly query the vector store on demand.
-* **Native UDS & SSE Transport:** Agent interaction occurs strictly via Unix Domain Sockets (IPC) without network stack overhead, featuring full support for Server-Sent Events (SSE) streaming.
-* **Secure Sandbox (Embedded JS):** Mathematical calculations, scripting, and data filtering are executed in an isolated Boa JS interpreter directly inside the process.
-* **Self-Healing Execution:** Automatic restarts for failed agents and localized prompt adjustments upon receiving invalid arguments from the model.
+* **Microservice Agent Isolation:** Agents run as lightweight IPC servers. Every skill execution runs in its own isolated context without cluttering the main conversation history.
+* **Extreme Token Scrubbing:** Technical payloads, raw JSONs, and tool calls never leak into the main dialogue. You pay only for meaningful orchestrator interactions.
+* **Deterministic Star Topology:** Agents are strict executors managed directly by the Kernel. They cannot spam each other or trigger infinite recursive loops.
+* **Zero-Overhead IPC & SSE Transport:** Communication moves strictly over Unix Domain Sockets (or Named Pipes for Windows) via native streaming protocols, avoiding HTTP network stack bloat.
+* **Smart Hybrid Memory (RAG + Context Injection):** Automatic pre-fetching of relevant facts before prompt assembly, plus explicit model-driven vector queries when needed.
+* **Embedded JS Engine (Boa Runtime):** Safe, deterministic math, data filtering, and scripting executed in a sandboxed JavaScript runtime inside the process.
+* **Self-Healing Loop:** Automatic process recovery and prompt correction on invalid model outputs without breaking the main user session.
+
+---
+
+## Official Extensions
+
+* **[osy-system](https://github.com/fuderis/osy-system.git): Local system management agent** —
+  Provides system metrics, appearance changing, power & media control, disks & infrastructure management.
 
 ---
 
@@ -60,16 +68,16 @@ Memory in Osy is split across several managed layers:
 
 ---
 
-## Comparison: Standard Frameworks vs. Osy
+## Comparison: Traditional Frameworks vs. Osy
 
-| Parameter | Traditional Agent Frameworks | Osy Core Engine |
+| Parameter | Traditional Agent Frameworks | Osy Kernel Engine |
 |---|---|---|
-| **Agent Communication** | Mesh / P2P (agents spam each other) | Isolated Star (exclusively through Kernel) |
-| **Token Consumption** | Grows linearly with every Tool Call | Fixed (service context is scrubbed) |
-| **Memory** | Simple Vector Search / RAG | Hybrid RAG (Auto + Explicit + Dynamic Prompts) |
-| **Network Stack** | Heavy HTTP/REST wrappers | Native Unix Domain Sockets + SSE Stream |
-| **Predictability** | Probabilistic (high risk of hallucinations) | Deterministic (strict kernel scenarios) |
-| **Processes** | Spawning per request | Long-lived persistent IPC workers |
+| **Architecture** | Heavy monolithic Mesh / P2P | Process-isolated Microservices |
+| **Context Management** | Polluted by raw JSONs & tool logs | Zero Pollution (Orchestrator sees only final results) |
+| **Token Consumption** | Grows exponentially with every call | Strictly bounded & token-scrubbed |
+| **Communication** | Heavy HTTP/REST wrappers | Low-latency Unix Domain Sockets (UDS) |
+| **Predictability** | High risk of hallucination loops | Deterministic Kernel-managed state machine |
+| **Worker Model** | Short-lived per-request spawns | Long-lived persistent IPC micro-workers |
 
 ---
 
@@ -81,6 +89,9 @@ Memory in Osy is split across several managed layers:
 * [x] Embedded JS Engine (Boa Runtime for Isolated Computations).
 * [x] Interactive Events with Callback (Confirmation Prompt, Select Menu, etc.).
 * [ ] Native Web Search (Obscure integration).
+
+> 💡 **Contributions Welcome:** If you are passionate about low-level Rust systems, deterministic AI
+orchestration, or IPC engine design, feel free to open issues, submit pull requests, or reach out!
 
 ---
 
@@ -115,14 +126,9 @@ osy --help
 
 ---
 
-> 💡 **Contributions Welcome:** If you are passionate about low-level Rust systems, deterministic AI orchestration,
-or IPC engine design, feel free to open issues, submit pull requests, or reach out!
-
----
-
 ## Licensing & Commercial Usage
 
-This project is distributed under the [**GNU General Public License v3.0 (GPL-3.0)**](LICENSE.md).
+This project is distributed under the [**GNU General Public License v3.0**](LICENSE.md).
 
 ### Dual Licensing
 

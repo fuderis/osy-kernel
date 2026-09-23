@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod macros;
+
 pub mod agent_metadata;
 pub use agent_metadata::*;
 
@@ -42,20 +44,3 @@ pub use data::*;
 
 pub mod uniq_id;
 pub use uniq_id::Id;
-
-#[macro_export]
-macro_rules! macos_protection {
-    () => {{
-        #[cfg(target_os = "macos")]
-        {
-            tokio::spawn(async {
-                use tokio::io::AsyncReadExt;
-                let mut std_in = tokio::io::stdin();
-                let mut buf = [0; 1];
-                if let Ok(0) = std_in.read(&mut buf).await {
-                    std::process::exit(0);
-                }
-            });
-        }
-    }};
-}

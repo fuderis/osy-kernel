@@ -3,12 +3,12 @@ use crate::prelude::*;
 use anylm::{
     api::{Messages, Schema},
     completions::{Chunk, Completions},
-    embeddings::{EmbeddingSearch, Embeddings},
+    embeddings::{Embeddings, Search},
 };
 
 /// Generates the text embeddings.
-pub async fn generate_embedding(text: &str, search: EmbeddingSearch) -> Result<Vec<f32>> {
-    let ai_ops = Settings::get().embeddings.options.clone();
+pub async fn generate_embedding(text: &str, search: Search) -> Result<Vec<f32>> {
+    let ai_ops = Config::get().embeddings.options.clone();
 
     let embeddings = Embeddings::try_from(ai_ops)?
         .input(text)
@@ -27,15 +27,17 @@ pub async fn generate_embedding(text: &str, search: EmbeddingSearch) -> Result<V
 
 /// Normalizes user fact text.
 pub async fn normalize_fact_text(raw_text: &str) -> String {
-    let ops = &Settings::get().completions;
+    let cfg = &Config::get();
+    let normalize_prompt = &cfg.prompts.normalize_prompt;
+    let provider_options = &cfg.completions.options;
 
     let messages = Messages::new()
-        .system(vec![ops.normalize_prompt.clone().into()])
+        .system(vec![normalize_prompt.as_str().into()])
         .user(vec![raw_text.into()])
         .wrap();
 
     let res = async {
-        let mut response = Completions::try_from(ops.options.clone())?
+        let mut response = Completions::try_from(provider_options.clone())?
             .schema(
                 Schema::object("Normalized fact search structure").required_property(
                     "search_text",
@@ -73,13 +75,15 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
 
 /// Translates text to English.
 pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String> {
-    let ops = &Settings::get().completions;
+    let cfg = Config::get();
+    let translate_prompt = &cfg.prompts.translate_prompt;
+    let provider_options = &cfg.completions.options;
 
     let messages = Messages::new()
         .system(vec![
             format!(
                 "{}{}",
-                ops.translate_prompt.trim(),
+                translate_prompt.trim(),
                 if vec_search {
                     "Optimize for semantic vector search."
                 } else {
@@ -91,7 +95,7 @@ pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String
         .user(vec![text.into()])
         .wrap();
 
-    let mut response = Completions::try_from(ops.options.clone())?
+    let mut response = Completions::try_from(provider_options.clone())?
         .schema(
             Schema::object("Search query translation structure").required_property(
                 "translated_text",

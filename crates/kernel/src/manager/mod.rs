@@ -6,9 +6,9 @@ pub use agent::Agent;
 use crate::{prelude::*, skills};
 
 use anylm::api::Tool;
+use atoman::task::JoinSet;
 use osy_share::AgentMeta;
 use std::fmt::Write;
-use tokio::task::JoinSet;
 
 /// Agents manager state.
 pub static MANAGER: State<Manager> = State::default();
@@ -23,7 +23,7 @@ pub struct Manager {
 
 impl Manager {
     /// Initializes & runs the agents management.
-    #[log(skip_all)]
+    #[log()]
     pub async fn init() -> Result<()> {
         let scan_dir = path!("$/");
 
@@ -82,7 +82,7 @@ impl Manager {
     }
 
     /// Checks & updates agents list.
-    #[log(skip_all)]
+    #[log()]
     pub async fn update() -> Result<()> {
         info!("[Manager] Starting agents update cycle...");
 

@@ -13,10 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod config;
 pub mod error;
 pub mod prelude;
-
-pub mod settings;
 pub mod utils;
 
 pub mod manager;
@@ -33,12 +32,12 @@ use prelude::*;
 
 use rigging::{CommandContext, Commands, Stylize, pkg_meta};
 
-#[tokio::main]
+#[atoman::main]
 async fn main() -> Result<()> {
     use commands as cmds;
 
-    // init settings
-    Settings::init(path!("$config$/settings.toml")).await?;
+    // init config
+    Config::init(path!("$config$/config.toml")).await?;
 
     // handle arguments
     if let Err(e) = Commands::new()
@@ -49,47 +48,38 @@ async fn main() -> Result<()> {
         .cmd(
             "server status",
             "Check the status of kernel server.",
-            |_| async move { cmds::server::handle_status().await },
+            |_| async move { cmds::handle_server_status().await },
         )
         .cmd(
-            "server start -l|--lms=false",
+            "server start",
             "Start the kernel server in the background.",
-            |ctx| async move {
-                let start_lms = ctx.get("lms")?;
-                cmds::server::handle_start(start_lms).await
-            },
+            |_| async move { cmds::handle_server_start().await },
         )
         .cmd(
-            "server stop -l|--lms=false",
+            "server stop",
             "Stop the server by killing the port process.",
-            |ctx| async move {
-                let stop_lms = ctx.get("lms")?;
-                cmds::server::handle_stop(stop_lms).await
-            },
+            |_| async move { cmds::handle_server_stop().await },
         )
         .cmd(
-            "server restart -l|--lms=false",
+            "server restart",
             "Restart the ecosystem (stop -> start).",
-            |ctx| async move {
-                let restart_lms = ctx.get("lms")?;
-                cmds::server::handle_restart(restart_lms).await
-            },
+            |_| async move { cmds::handle_server_restart().await },
         )
         //    HEALTH
         .cmd(
             "status",
             "Check the status of all ecosystem components.",
-            |_| async move { cmds::health::handle_status().await },
+            |_| async move { cmds::handle_health_status().await },
         )
         .cmd(
             "refresh",
             "Refresh the server settings & agents list.",
-            |_| async move { cmds::health::handle_refresh().await },
+            |_| async move { cmds::handle_health_refresh().await },
         )
         .cmd(
             "config",
             "Open settings.toml in the default system editor.",
-            |_| async move { cmds::health::handle_config().await },
+            |_| async move { cmds::handle_health_config().await },
         )
         //    CHAT
         .cmd(
@@ -100,7 +90,7 @@ async fn main() -> Result<()> {
                 let new_session = ctx.get("new")?;
                 let load_history = ctx.get("load")?;
                 let use_sudo = ctx.get("sudo")?;
-                cmds::chat::handle_chat(uid, new_session, load_history, use_sudo).await
+                cmds::handle_chat(uid, new_session, load_history, use_sudo).await
             },
         )
         //    TRACING
@@ -110,7 +100,22 @@ async fn main() -> Result<()> {
             |ctx| async move {
                 let uid = ctx.get_opt::<u64>("uid")?;
                 let only_new = ctx.get("new")?;
-                cmds::trace::handle_trace(uid, only_new).await
+                cmds::handle_trace(uid, only_new).await
+            },
+        )
+        //    SKILLS
+        .cmd(
+            "do {skill} {payload..}",
+            "Executes agent skills directly.",
+            |ctx| async move {
+                let skill = ctx.get::<String>("skill")?;
+                let payload = ctx.get::<String>("payload")?;
+                match skill.split_once('.') {
+                    Some((skill_name, tool_name)) => {
+                        cmds::handle_tool_call(skill_name, tool_name, payload).await
+                    }
+                    None => cmds::handle_skill_query(skill, payload).await,
+                }
             },
         )
         .run()
@@ -133,55 +138,47 @@ async fn serve(_: CommandContext) -> Result<()> {
     // start server
     Server::new()
         //      HEALTH
-        .get("/ping", hands::health::handle_ping)
-        .get("/status", hands::health::handle_status)
-        .get("/refresh", hands::health::handle_refresh)
+        .get("/ping", hands::handle_ping)
+        .get("/status", hands::handle_status)
+        .get("/refresh", hands::handle_refresh)
+        .get("/options", hands::handle_options)
         //      USERS
-        .post("/users/{uid}/sessions", hands::users::handle_list)
-        .post("/users/{uid}/facts/list", hands::users::handle_facts_list)
-        .post("/users/{uid}/facts/set", hands::users::handle_facts_set)
-        .post(
-            "/users/{uid}/facts/remove",
-            hands::users::handle_facts_remove,
-        )
-        .post("/users/{uid}/facts/clear", hands::users::handle_facts_clear)
-        .post(
-            "/users/{uid}/facts/search",
-            hands::users::handle_facts_search,
-        )
-        .post("/users/{uid}/rules/list", hands::users::handle_rules_list)
-        .post("/users/{uid}/rules/set", hands::users::handle_rules_set)
-        .post(
-            "/users/{uid}/rules/remove",
-            hands::users::handle_rules_remove,
-        )
-        .post("/users/{uid}/rules/clear", hands::users::handle_rules_clear)
+        .post("/users/{uid}/sessions", hands::handle_user_sessions_list)
+        .post("/users/{uid}/facts/list", hands::handle_user_facts_list)
+        .post("/users/{uid}/facts/set", hands::handle_user_facts_set)
+        .post("/users/{uid}/facts/remove", hands::handle_user_facts_remove)
+        .post("/users/{uid}/facts/clear", hands::handle_user_facts_clear)
+        .post("/users/{uid}/facts/search", hands::handle_user_facts_search)
+        .post("/users/{uid}/rules/list", hands::handle_user_rules_list)
+        .post("/users/{uid}/rules/set", hands::handle_user_rules_set)
+        .post("/users/{uid}/rules/remove", hands::handle_user_rules_remove)
+        .post("/users/{uid}/rules/clear", hands::handle_user_rules_clear)
         //      SESSIONS
-        .post("/sessions/{sid}/init", hands::sessions::handle_init)
-        .post("/sessions/{sid}/finish", hands::sessions::handle_finish)
-        .post("/sessions/{sid}/compact", hands::sessions::handle_compact)
-        .post("/sessions/{sid}/clear", hands::sessions::handle_clear)
-        .post("/sessions/{sid}/clone", hands::sessions::handle_clone)
+        .post("/sessions/{sid}/init", hands::handle_session_init)
+        .post("/sessions/{sid}/finish", hands::handle_session_finish)
+        .post("/sessions/{sid}/compact", hands::handle_session_compact)
+        .post("/sessions/{sid}/clear", hands::handle_session_clear)
+        .post("/sessions/{sid}/clone", hands::handle_session_clone)
         .post(
             "/sessions/{sid}/rules/list",
-            hands::sessions::handle_rules_list,
+            hands::handle_session_rules_list,
         )
-        .post(
-            "/sessions/{sid}/rules/set",
-            hands::sessions::handle_rules_set,
-        )
+        .post("/sessions/{sid}/rules/set", hands::handle_session_rules_set)
         .post(
             "/sessions/{sid}/rules/remove",
-            hands::sessions::handle_rules_remove,
+            hands::handle_session_rules_remove,
         )
         .post(
             "/sessions/{sid}/rules/clear",
-            hands::sessions::handle_rules_clear,
+            hands::handle_session_rules_clear,
         )
         //      QUERY
-        .post("/sessions/{sid}/query", hands::query::handle_user_query)
+        .post("/sessions/{sid}/query", hands::handle_user_query)
+        //      SKILLS
+        .post("/skills/{skill}/query", hands::handle_skill_query)
+        .post("/skills/{skill}/call/{tool}", hands::handle_tool_call)
         .callback(true)
-        .run(Settings::get().server.port)
+        .run(Config::get().server.port)
         .await?;
 
     Ok(())

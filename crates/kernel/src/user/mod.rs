@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::{prelude::*, utils};
 
-use anylm::embeddings::EmbeddingSearch;
+use anylm::embeddings::Search;
 use cistern::{Context, ContextRecord, Storage, gen_id};
 use osy_share::{SessionId, UserFact, UserRule};
 
@@ -193,11 +193,11 @@ impl UserState {
 
         // generate text embedding
         let search_text = utils::normalize_fact_text(&text).await;
-        let embedding = utils::generate_embedding(&search_text, EmbeddingSearch::Document).await?;
+        let embedding = utils::generate_embedding(&search_text, Search::Document).await?;
 
         // remove duplicate (if exists)
         let table = self.rag_db.open_table(FACTS_TABLE_NAME).await?;
-        let dedup_threshold = Settings::get().context.dedup_similarity;
+        let dedup_threshold = Config::get().context.dedup_similarity;
 
         if let Ok(Some(similar_facts)) = table
             .read::<UserFact>(embedding.clone(), Some(5), dedup_threshold)
@@ -243,9 +243,9 @@ impl UserState {
         };
 
         // generate query embedding
-        let embedding = utils::generate_embedding(&query, EmbeddingSearch::Query).await?;
+        let embedding = utils::generate_embedding(&query, Search::Query).await?;
 
-        let ctx = &Settings::get().context;
+        let ctx = &Config::get().context;
         let dist = ctx.fact_similarity;
 
         // search facts in database

@@ -3,22 +3,17 @@ use crate::{
     utils::{self, SudoGuard},
 };
 
-use anylm::api::{Message, Messages, Role, Visibility};
+use anylm::api::Message;
 use chrono::Local;
 use osy_share::{
-    CommandResult, CompactQuery, DialogEvent, Event, HandleQuery, ListQuery, RemoveQuery,
-    SearchQuery, SessionId, SetQuery, UserFact, UserRule,
+    CompactQuery, Event, HandleQuery, ListQuery, RemoveQuery, SearchQuery, SessionId, SetQuery,
+    UserFact, UserRule,
 };
 use rigging::{
     Stylize,
-    render::SubWidgetPosition,
-    style::{Align, BorderStyle, LineStyle, SpinnerStyle},
-    widgets::{ConfirmPrompt, Input, Print, SelectMenu, Text},
+    style::{Align, SpinnerStyle},
+    widgets::Print,
 };
-use tokio::process::Command;
-
-const MIN_WIDTH: usize = 80;
-const INPUT_MAX_HEIGHT: usize = 20;
 
 /// API: Handles interactive chat with assistant.
 pub async fn handle_chat(
@@ -33,33 +28,31 @@ pub async fn handle_chat(
         None
     };
 
-    let port = Settings::get().server.port;
+    let port = Config::get().server.port;
     let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::tcp();
 
     // refresh/start kernel server
-    ensure_server(&client, &base_url).await?;
+    utils::ensure_server(&client, &base_url).await?;
 
     // init user session handling
     let session_id = State::from(if new_session {
         SessionId::new(uid)
     } else {
-        get_last_sid(&client, &base_url, uid).await
+        utils::get_last_sid(&client, &base_url, uid).await
     });
-    init_session(&client, &base_url, session_id.get_cloned(), load_history).await?;
+    utils::init_session(&client, &base_url, session_id.get_cloned(), load_history).await?;
 
     let run_loop = async {
         loop {
             let base_url = base_url.clone();
-            let cfg = Settings::get();
+            let cfg = Config::get();
             let brand_color = cfg.theme.brand_color();
-            let bg_color = cfg.theme.bg_color();
             let alt_color = cfg.theme.alt_color();
-            let blink_color = cfg.theme.blink_color();
 
             // --- Phase A: User Input ---
             // capture multiline user input from interactive terminal widget
-            let user_query = Input::new()
+            let user_query = utils::input_widget()
                 .placeholder("Enter instructions...".with(alt_color))
                 .title(" Prompt ".bold().with(brand_color), Align::TopLeft)
                 .title(
@@ -73,15 +66,8 @@ pub async fn handle_chat(
                     Align::BottomRight,
                 )
                 .use_buffer(0, Some(100))
-                .min_width(MIN_WIDTH)
-                .max_height(INPUT_MAX_HEIGHT)
-                .border_style(BorderStyle::Rounded)
-                .border_color(brand_color)
-                .background_color(bg_color)
-                .padding_hor(1)
+                .max_height(utils::INPUT_MAX_HEIGHT)
                 .multiline(true)
-                .show_cursor(true)
-                .clear_after(true)
                 .render()
                 .await?;
 
@@ -128,15 +114,7 @@ pub async fn handle_chat(
 
                 // helper for displaying results in the UI
                 let render_msg = |msg: String| async move {
-                    Text::new("")
-                        .markdown(true)
-                        .min_width(MIN_WIDTH)
-                        .border_style(BorderStyle::Rounded)
-                        .border_color(brand_color)
-                        .accent_color(brand_color)
-                        .background_color(bg_color)
-                        .padding_hor(1)
-                        .margin_bottom(1)
+                    utils::text_widget("")
                         .handler(move |mut ctx| async move {
                             *ctx.state = msg;
                             ctx.notify();
@@ -755,20 +733,12 @@ pub async fn handle_chat(
                         let preserve = args
                             .get(1)
                             .and_then(|i| i.parse::<usize>().ok())
-                            .unwrap_or_else(|| Settings::get().execution.preserve_messages);
+                            .unwrap_or_else(|| Config::get().execution.preserve_messages);
 
-                        Text::new("Compressing context...")
-                            .markdown(true)
+                        utils::text_widget("Compressing context...")
                             .title(" Thinking... ".bold().with(brand_color), Align::TopLeft)
-                            .min_width(MIN_WIDTH)
                             .spinner_style(SpinnerStyle::Dots)
                             .spinner_color(brand_color)
-                            .border_style(BorderStyle::Rounded)
-                            .border_color(brand_color)
-                            .background_color(bg_color)
-                            .padding_hor(1)
-                            .margin_bottom(1)
-                            .accent_color(brand_color)
                             .handler(move |mut ctx| async move {
                                 let endpoint = format!("{base_url}/sessions/{sid}/compact");
                                 let res = Client::tcp()
@@ -833,354 +803,27 @@ pub async fn handle_chat(
             let query_msg = Message::user(vec![trimmed.into()]);
 
             // render user message
-            Text::new("")
+            utils::text_widget("")
                 .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
-                .markdown(true)
-                .min_width(MIN_WIDTH)
-                .border_style(BorderStyle::Rounded)
                 .border_color(alt_color)
-                .background_color(bg_color)
-                .padding_hor(1)
-                .accent_color(brand_color)
+                .margin_bottom(0)
                 .handler(move |mut ctx| async move {
                     *ctx.state = user_msg;
-                    ctx.notify();
+                    ctx.sync();
                     ctx.finish();
                 })
                 .render()
                 .await?;
 
             // render response message
-            Text::new("")
-                .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
-                .markdown(true)
-                .min_width(MIN_WIDTH)
-                .spinner_style(SpinnerStyle::MiniDots)
-                .spinner_color(brand_color)
-                .prefix_line(LineStyle::Solid)
-                .prefix_color(alt_color)
-                .border_style(BorderStyle::Rounded)
-                .border_color(brand_color)
-                .accent_color(brand_color)
-                .background_color(bg_color)
-                .padding_hor(1)
-                .margin_bottom(1)
-                .handler(move |mut ctx| async move {
-                    let mut full_response = String::new();
-                    let mut status_msg: Option<String> = None;
-
-                    // establish async SSE event stream connection with server
-                    let res = Client::tcp()
-                        .post(&format!("{base_url}/sessions/{sid}/query"))
-                        .json(&HandleQuery { message: query_msg })
-                        .stream::<Event>()
-                        .await;
-
-                    match res {
-                        Ok(mut stream) => {
-                            let update_ui =
-                                |state: &mut String, resp: &str, status: Option<&str>| match (
-                                    resp.is_empty(),
-                                    status,
-                                ) {
-                                    (true, Some(st)) => *state = st.to_string(),
-                                    (false, Some(st)) => *state = format!("{resp}\n\n{st}"),
-                                    (_, None) => *state = resp.to_string(),
-                                };
-
-                            // process streaming tokens and update widget buffer in real time
-                            while let Ok(Some(event)) = stream.recv().await {
-                                match event {
-                                    Event::Thinking(status) => {
-                                        status_msg = Some(format!("{}", status.italic().dim()));
-                                        update_ui(
-                                            &mut ctx.state,
-                                            &full_response,
-                                            status_msg.as_deref(),
-                                        );
-                                        ctx.sync_n(3);
-                                        ctx.notify();
-                                    }
-                                    Event::Answer(chunk) => {
-                                        full_response.push_str(&chunk);
-                                        update_ui(
-                                            &mut ctx.state,
-                                            &full_response,
-                                            status_msg.as_deref(),
-                                        );
-                                        ctx.sync_n(3);
-                                        ctx.notify();
-                                    }
-                                    Event::Error(err) => {
-                                        let formatted_err =
-                                            if let Some((title, msg)) = err.split_once(':') {
-                                                format!(
-                                                    "{}{} {}",
-                                                    "Error: ".red().bold(),
-                                                    title.red().bold(),
-                                                    msg
-                                                )
-                                            } else {
-                                                format!("{} {}", "Error: ".red().bold(), err)
-                                            };
-
-                                        status_msg = Some(formatted_err);
-                                        update_ui(
-                                            &mut ctx.state,
-                                            &full_response,
-                                            status_msg.as_deref(),
-                                        );
-                                        ctx.sync_n(3);
-                                        ctx.notify();
-                                    }
-
-                                    // --- Interactive Dialog Event Handling ---
-                                    Event::Dialog(dialog_event) => match dialog_event {
-                                        // bash execution in background
-                                        DialogEvent::Script { id, code } => {
-                                            status_msg = Some(format!(
-                                                "{}",
-                                                "Executing script...".italic().dim()
-                                            ));
-                                            update_ui(
-                                                &mut ctx.state,
-                                                &full_response,
-                                                status_msg.as_deref(),
-                                            );
-                                            ctx.sync_n(3);
-                                            ctx.notify();
-
-                                            let output = tokio::process::Command::new("bash")
-                                                .arg("-c")
-                                                .arg(&code)
-                                                .output()
-                                                .await;
-
-                                            let result_payload = match output {
-                                                Ok(out) => CommandResult {
-                                                    stdout: String::from_utf8_lossy(&out.stdout)
-                                                        .to_string(),
-                                                    stderr: String::from_utf8_lossy(&out.stderr)
-                                                        .to_string(),
-                                                    exit_code: out.status.code().unwrap_or(-1)
-                                                        as i16,
-                                                    success: out.status.success(),
-                                                },
-                                                Err(e) => CommandResult {
-                                                    stdout: String::new(),
-                                                    stderr: e.to_string(),
-                                                    exit_code: -1,
-                                                    success: false,
-                                                },
-                                            };
-
-                                            let callback_url = format!("{base_url}/callback/{id}");
-                                            let _ = Client::tcp()
-                                                .post(&callback_url)
-                                                .json(&result_payload)
-                                                .send()
-                                                .await;
-
-                                            status_msg = None;
-                                            update_ui(
-                                                &mut ctx.state,
-                                                &full_response,
-                                                status_msg.as_deref(),
-                                            );
-                                            ctx.sync_n(3);
-                                            ctx.notify();
-                                        }
-
-                                        // action confirmation [y/n]
-                                        DialogEvent::Confirm {
-                                            id,
-                                            prompt,
-                                            default,
-                                        } => {
-                                            let mut confirm_block = ConfirmPrompt::new(&prompt)
-                                                .markdown(true)
-                                                .min_width(MIN_WIDTH)
-                                                .border_style(BorderStyle::Rounded)
-                                                .border_color(brand_color)
-                                                .accent_color(brand_color)
-                                                .padding_hor(1)
-                                                .margin_bottom(1)
-                                                .background_color(bg_color)
-                                                .clear_after(true);
-                                            if let Some(def) = default {
-                                                confirm_block = confirm_block.default(def);
-                                            }
-
-                                            if let Ok(value) = ctx
-                                                .show_sub_widget(
-                                                    confirm_block,
-                                                    SubWidgetPosition::Replace,
-                                                )
-                                                .await
-                                            {
-                                                let callback_url =
-                                                    format!("{base_url}/callback/{id}");
-                                                let _ = Client::tcp()
-                                                    .post(&callback_url)
-                                                    .json(&value)
-                                                    .send()
-                                                    .await;
-                                            }
-                                        }
-
-                                        // prompt text input
-                                        DialogEvent::Prompt {
-                                            id,
-                                            prompt,
-                                            placeholder,
-                                            default,
-                                            multiline,
-                                        } => {
-                                            let is_multi = multiline.unwrap_or(false);
-                                            let mut input_block = Input::new()
-                                                .title(
-                                                    prompt.bold().with(brand_color),
-                                                    Align::TopLeft,
-                                                )
-                                                .min_width(MIN_WIDTH)
-                                                .border_style(BorderStyle::Rounded)
-                                                .border_color(brand_color)
-                                                .background_color(bg_color)
-                                                .padding_hor(1)
-                                                .margin_bottom(1)
-                                                .multiline(is_multi)
-                                                .show_cursor(true)
-                                                .clear_after(true);
-
-                                            if let Some(ph) = placeholder {
-                                                input_block =
-                                                    input_block.placeholder(ph.with(alt_color));
-                                            }
-                                            if let Some(def) = default {
-                                                input_block = input_block.default_val(def);
-                                            }
-
-                                            if let Ok(res) = ctx
-                                                .show_sub_widget(
-                                                    input_block,
-                                                    SubWidgetPosition::Replace,
-                                                )
-                                                .await
-                                            {
-                                                let value = if res.trim().is_empty() {
-                                                    None
-                                                } else {
-                                                    Some(res)
-                                                };
-                                                let callback_url =
-                                                    format!("{base_url}/callback/{id}");
-                                                let _ = Client::tcp()
-                                                    .post(&callback_url)
-                                                    .json(&value)
-                                                    .send()
-                                                    .await;
-                                            }
-                                        }
-
-                                        // secret input
-                                        DialogEvent::Secret {
-                                            id,
-                                            prompt,
-                                            placeholder,
-                                        } => {
-                                            let mut input_block = Input::new()
-                                                .title(
-                                                    prompt.bold().with(brand_color),
-                                                    Align::TopLeft,
-                                                )
-                                                .min_width(MIN_WIDTH)
-                                                .border_style(BorderStyle::Rounded)
-                                                .border_color(brand_color)
-                                                .background_color(bg_color)
-                                                .padding_hor(1)
-                                                .margin_bottom(1)
-                                                .secret(true)
-                                                .show_cursor(true)
-                                                .clear_after(true);
-
-                                            if let Some(ph) = placeholder {
-                                                input_block =
-                                                    input_block.placeholder(ph.with(alt_color));
-                                            }
-
-                                            if let Ok(res) = ctx
-                                                .show_sub_widget(
-                                                    input_block,
-                                                    SubWidgetPosition::Replace,
-                                                )
-                                                .await
-                                            {
-                                                let value = if res.trim().is_empty() {
-                                                    None
-                                                } else {
-                                                    Some(res)
-                                                };
-                                                let callback_url =
-                                                    format!("{base_url}/callback/{id}");
-                                                let _ = Client::tcp()
-                                                    .post(&callback_url)
-                                                    .json(&value)
-                                                    .send()
-                                                    .await;
-                                            }
-                                        }
-
-                                        // select menu
-                                        DialogEvent::Select { id, prompt, items } => {
-                                            let select_block = SelectMenu::new(prompt, items)
-                                                .min_width(MIN_WIDTH)
-                                                .border_style(BorderStyle::Rounded)
-                                                .border_color(brand_color)
-                                                .padding_hor(1)
-                                                .margin_bottom(1)
-                                                .background_color(bg_color)
-                                                .clear_after(true);
-
-                                            if let Ok(value) = ctx
-                                                .show_sub_widget(
-                                                    select_block,
-                                                    SubWidgetPosition::Replace,
-                                                )
-                                                .await
-                                            {
-                                                let callback_url =
-                                                    format!("{base_url}/callback/{id}");
-                                                let _ = Client::tcp()
-                                                    .post(&callback_url)
-                                                    .json(&value)
-                                                    .send()
-                                                    .await;
-                                            }
-                                        }
-                                    },
-
-                                    Event::Finish => {
-                                        let _ = status_msg.take();
-                                        update_ui(&mut ctx.state, &full_response, None);
-                                        break;
-                                    }
-                                }
-                            }
-
-                            ctx.sync();
-                            ctx.notify();
-                        }
-                        Err(err) => {
-                            *ctx.state =
-                                format!("\n{} Connection failed: {err}", "Error:".red().bold());
-                            ctx.notify();
-                        }
-                    }
-                    ctx.finish();
-                })
-                .blink_color(blink_color)
-                .render()
-                .await?;
+            utils::render_response(
+                format!("{base_url}/sessions/{sid}/query"),
+                HandleQuery {
+                    message: query_msg,
+                    info: None,
+                },
+            )
+            .await?;
         }
 
         Ok::<(), DynError>(())
@@ -1208,165 +851,4 @@ pub async fn handle_chat(
     }
 
     res
-}
-
-/// Ensures that kernel server is started.
-async fn ensure_server(client: &Client, base_url: &str) -> Result<()> {
-    // verify whether the backend server is reachable
-    if client
-        .get(&format!("{base_url}/ping"))
-        .send()
-        .await
-        .is_err()
-    {
-        // attempt to auto-start backend process if offline
-        if Command::new(path!("$"))
-            .args(&["server", "start"])
-            .spawn()
-            .is_ok()
-        {
-            let ping_url = format!("{base_url}/ping");
-            let mut is_ok = false;
-
-            // poll status endpoint until service responds or times out
-            for _ in 0..10 {
-                tokio::time::sleep(Duration::from_millis(1000)).await;
-                if client
-                    .get(&ping_url)
-                    .timeout(Duration::from_millis(1000))
-                    .send()
-                    .await
-                    .is_ok()
-                {
-                    is_ok = true;
-                    break;
-                }
-            }
-
-            // report timeout if service fails to respond
-            if !is_ok {
-                eprintln!(
-                    "{}: Server started but is not responding.",
-                    "Timeout".red().bold()
-                );
-            }
-        } else {
-            // log process spawning failure
-            eprintln!("{}: Failed to execute server", "Error".red().bold());
-        }
-    }
-
-    Ok(())
-}
-
-/// Returns recently active session ID.
-async fn get_last_sid(client: &Client, base_url: &str, uid: u64) -> SessionId {
-    let sessions_url = format!("{base_url}/users/{uid}/sessions");
-    let sessions_query = ListQuery { count: Some(1) };
-
-    // fetch existing active session for current user
-    if let Ok(res) = client
-        .post(&sessions_url)
-        .json(&sessions_query)
-        .send()
-        .await
-    {
-        if let Ok(active_sessions) = res.json::<Vec<SessionId>>().await {
-            if let Some(last_session) = active_sessions.into_iter().next() {
-                return last_session;
-            }
-        }
-    }
-
-    SessionId::new(uid)
-}
-
-/// Initializes user session.
-async fn init_session(
-    client: &Client,
-    base_url: &str,
-    sid: SessionId,
-    load_history: bool,
-) -> Result<()> {
-    // initialize session on backend and retrieve history payload
-    let init_res = client
-        .post(&format!("{base_url}/sessions/{sid}/init"))
-        .json(&utils::session_info())
-        .send()
-        .await;
-
-    if let Ok(res) = init_res {
-        if let Ok(history) = res.json::<Messages>().await {
-            // filter messages: retain only public non-tool messages
-            let valid_messages: Vec<&Message> = history
-                .messages
-                .iter()
-                .filter(|msg| msg.visibility == Visibility::Public && !msg.role.is_tool())
-                .collect();
-
-            // load active UI color theme configurations
-            let cfg = Settings::get();
-            let brand_color = cfg.theme.brand_color();
-            let bg_color = cfg.theme.bg_color();
-            let alt_color = cfg.theme.alt_color();
-
-            if load_history {
-                for msg in valid_messages {
-                    let is_user = msg.role == Role::User;
-                    let border_c = if is_user { alt_color } else { brand_color };
-                    let msg_text = msg.extract_texts().concat();
-                    let timestamp = if let Some(dt) = msg.timestamp {
-                        format!(" {} ", dt.format("%a %I:%M %p").to_string())
-                            .with(alt_color)
-                            .to_string()
-                    } else {
-                        str!(" -:- ")
-                    };
-
-                    Text::new("")
-                        .title(timestamp, Align::TopLeft)
-                        .markdown(true)
-                        .min_width(MIN_WIDTH)
-                        .border_style(BorderStyle::Rounded)
-                        .border_color(border_c)
-                        .background_color(bg_color)
-                        .padding_hor(1)
-                        .margin_bottom(if is_user { 0 } else { 1 })
-                        .accent_color(brand_color)
-                        .handler(move |mut ctx| async move {
-                            *ctx.state = msg_text;
-                            ctx.finish();
-                        })
-                        .render()
-                        .await?;
-                }
-            } else {
-                let dialog_pairs = valid_messages.len() / 2;
-                if dialog_pairs > 0 {
-                    let info_text = format!(
-                        "Loaded {} previous dialog(s) in background.",
-                        dialog_pairs.to_string().with(brand_color)
-                    );
-
-                    Text::new("")
-                        .min_width(MIN_WIDTH)
-                        .border_style(BorderStyle::Rounded)
-                        .border_color(brand_color)
-                        .background_color(bg_color)
-                        .padding_hor(1)
-                        .margin_bottom(1)
-                        .accent_color(brand_color)
-                        .handler(move |mut ctx| async move {
-                            *ctx.state = info_text;
-                            ctx.notify();
-                            ctx.finish();
-                        })
-                        .render()
-                        .await?;
-                }
-            }
-        }
-    }
-
-    Ok(())
 }

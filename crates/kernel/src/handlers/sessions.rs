@@ -7,9 +7,12 @@ use anylm::{
 use osy_share::{CompactQuery, Event, RemoveQuery, SessionId, SessionInfo, SetQuery};
 
 /// API: Initializes the user session and returns its messages
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) -> Response {
-    let session_info = data.0;
+#[log(sid = %sid)]
+pub async fn handle_session_init(
+    Paths(sid): Paths<SessionId>,
+    payload: Json<SessionInfo>,
+) -> Response {
+    let session_info = payload.0;
     info!("Handling session init/get...");
 
     // check active session, or initialize a new one
@@ -45,8 +48,8 @@ pub async fn handle_init(Paths(sid): Paths<SessionId>, data: Json<SessionInfo>) 
 }
 
 /// API: Finishes the user session and flushes DB to prevent lock contention
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_finish(Paths(sid): Paths<SessionId>) -> Response {
+#[log(sid = %sid)]
+pub async fn handle_session_finish(Paths(sid): Paths<SessionId>) -> Response {
     match Session::finish(&sid).await {
         Ok(_) => Response::ok().text("Session finished successfully"),
         Err(e) => {
@@ -57,15 +60,25 @@ pub async fn handle_finish(Paths(sid): Paths<SessionId>) -> Response {
 }
 
 /// API: Handles the session compression
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuery>) -> Response {
-    let CompactQuery { preserve } = data.0;
+#[log(sid = %sid)]
+pub async fn handle_session_compact(
+    Paths(sid): Paths<SessionId>,
+    payload: Json<CompactQuery>,
+) -> Response {
+    let CompactQuery { preserve } = payload.0;
     let current = Span::current();
 
     Response::ok().stream(move |tx| {
         async move {
-            let cfg = Settings::get();
+            let cfg = Config::get();
             let preserve_count = preserve.unwrap_or(cfg.execution.preserve_messages);
+            let provider_options = cfg
+                .completions
+                .options
+                .clone()
+                .temperature(cfg.completions.compress_temp);
+            let compress_prompt = cfg.prompts.compress_prompt.clone();
+
             info!("Starting stream (preserve: {preserve_count})");
 
             let Some(session_shared) = Session::get(&sid).await else {
@@ -102,18 +115,10 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
             let mut messages = Messages::from(db_messages);
             let to_preserve: Vec<Message> = messages.slice(-(preserve_count as isize)).into();
 
-            let messages = messages
-                .user(vec![cfg.completions.compression_prompt.clone().into()])
-                .wrap();
-
-            let ops = cfg
-                .compression
-                .options
-                .clone()
-                .unwrap_or(cfg.completions.options.clone());
+            let messages = messages.user(vec![compress_prompt.into()]).wrap();
 
             info!("Sending compression request to LLM...");
-            let mut response = match Completions::try_from(ops) {
+            let mut response = match Completions::try_from(provider_options) {
                 Ok(comp) => match comp.send(messages).await {
                     Ok(res) => {
                         info!("Received LLM stream response handle");
@@ -185,8 +190,8 @@ pub async fn handle_compact(Paths(sid): Paths<SessionId>, data: Json<CompactQuer
 }
 
 /// Completely clears the session message history
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_clear(Paths(sid): Paths<SessionId>) -> Response {
+#[log(sid = %sid)]
+pub async fn handle_session_clear(Paths(sid): Paths<SessionId>) -> Response {
     if let Some(session_shared) = Session::get(&sid).await {
         info!("Waiting for session lock...");
         let res = {
@@ -207,8 +212,8 @@ pub async fn handle_clear(Paths(sid): Paths<SessionId>) -> Response {
 }
 
 /// Clones the user session and returns a new ID
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_clone(Paths(sid): Paths<SessionId>) -> Response {
+#[log(sid = %sid)]
+pub async fn handle_session_clone(Paths(sid): Paths<SessionId>) -> Response {
     if let Some(session_shared) = Session::get(&sid).await {
         info!("Waiting for session lock...");
         let clone_res = {
@@ -236,8 +241,8 @@ pub async fn handle_clone(Paths(sid): Paths<SessionId>) -> Response {
 // --- LOCAL SESSION RULES HANDLERS ---
 
 /// API: Lists active rules (global + local) for a session
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_rules_list(Paths(sid): Paths<SessionId>) -> Response {
+#[log(sid = %sid)]
+pub async fn handle_session_rules_list(Paths(sid): Paths<SessionId>) -> Response {
     info!("Looking up Session::get...");
     let Some(session_shared) = Session::get(&sid).await else {
         let err_msg = format!("Undefined session id `{sid}`");
@@ -267,9 +272,12 @@ pub async fn handle_rules_list(Paths(sid): Paths<SessionId>) -> Response {
 }
 
 /// API: Adds or updates a rule in the session or global context
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_rules_set(Paths(sid): Paths<SessionId>, data: Json<SetQuery>) -> Response {
-    let SetQuery { id, text } = data.0;
+#[log(sid = %sid)]
+pub async fn handle_session_rules_set(
+    Paths(sid): Paths<SessionId>,
+    payload: Json<SetQuery>,
+) -> Response {
+    let SetQuery { id, text } = payload.0;
     info!("Setting rule (id: {id:?})...");
 
     info!("Looking up Session::get...");
@@ -310,12 +318,12 @@ pub async fn handle_rules_set(Paths(sid): Paths<SessionId>, data: Json<SetQuery>
 }
 
 /// API: Removes a rule from the active session context by ID
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_rules_remove(
+#[log(sid = %sid)]
+pub async fn handle_session_rules_remove(
     Paths(sid): Paths<SessionId>,
-    data: Json<RemoveQuery>,
+    payload: Json<RemoveQuery>,
 ) -> Response {
-    let rule_id = data.0.id;
+    let rule_id = payload.0.id;
     info!("Removing rule `{rule_id}`...");
 
     info!("Looking up Session::get...");
@@ -352,8 +360,8 @@ pub async fn handle_rules_remove(
 }
 
 /// API: Clears only the local rules for a session
-#[log(skip_all, fields(sid = %sid))]
-pub async fn handle_rules_clear(Paths(sid): Paths<SessionId>) -> Response {
+#[log(sid = %sid)]
+pub async fn handle_session_rules_clear(Paths(sid): Paths<SessionId>) -> Response {
     info!("Requesting clear_local_rules...");
 
     info!("Looking up Session::get...");

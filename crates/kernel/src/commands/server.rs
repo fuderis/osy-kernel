@@ -1,18 +1,13 @@
 use crate::prelude::*;
 
+use atoman::{process::Command, time::sleep};
 use osy_share::{AgentMeta, StatusData};
 use rigging::{Stylize, widgets::Print};
-use std::{net::TcpListener, process::Stdio, time::Duration};
-use tokio::{
-    process::Command,
-    time::{sleep, timeout},
-};
-
-const TIMEOUT: Duration = Duration::from_millis(500);
+use std::{net::TcpListener, time::Duration};
 
 /// API: Handles server status checking.
-pub async fn handle_status() -> Result<()> {
-    let port = str!(Settings::get().server.port);
+pub async fn handle_server_status() -> Result<()> {
+    let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
     Print::h1("Kernel Server:").render().await?;
@@ -76,10 +71,10 @@ pub async fn handle_status() -> Result<()> {
 }
 
 /// API: Handles server launching.
-pub async fn handle_start(start_lms: bool) -> Result<()> {
+pub async fn handle_server_start() -> Result<()> {
     Print::h1("Starting Server:").render().await?;
 
-    let cfg = Settings::get();
+    let cfg = Config::get();
 
     // start server
     let port = str!(cfg.server.port);
@@ -103,68 +98,6 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
             .await?;
     }
 
-    // start LMS server
-    if start_lms {
-        Print::h1("Starting LMS Server:")
-            .margin_top(1)
-            .render()
-            .await?;
-
-        let is_running = match timeout(TIMEOUT, Command::new("lms").args(["status"]).output()).await
-        {
-            Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).contains("ON"),
-            _ => false,
-        };
-
-        if !is_running {
-            match Command::new("lms")
-                .args(["server", "start"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                Ok(_child) => {
-                    let mut is_ok = false;
-
-                    // 100 tries * 100 ms = 10 seconds to start
-                    for _ in 0..100 {
-                        sleep(Duration::from_millis(100)).await;
-
-                        let status_check =
-                            timeout(TIMEOUT, Command::new("lms").args(["status"]).output()).await;
-
-                        if let Ok(Ok(out)) = status_check {
-                            if String::from_utf8_lossy(&out.stdout).contains("ON") {
-                                is_ok = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if is_ok {
-                        Print::field("Status", str!("Online".green()))
-                            .render()
-                            .await?;
-                    } else {
-                        Print::warn(str!("LMS server failed to start...".red()))
-                            .render()
-                            .await?;
-                    }
-                }
-
-                Err(e) => {
-                    return Err(
-                        Error::Titled("Failed to spawn LMS process".into(), e.into()).into(),
-                    );
-                }
-            }
-        } else {
-            Print::field("Status", str!("Online".green()))
-                .render()
-                .await?;
-        }
-    }
-
     Print::success("Ready for requests!")
         .margin_top(1)
         .render()
@@ -175,10 +108,10 @@ pub async fn handle_start(start_lms: bool) -> Result<()> {
 }
 
 /// API: Handles server shutdown.
-pub async fn handle_stop(stop_lms: bool) -> Result<()> {
+pub async fn handle_server_stop() -> Result<()> {
     Print::h1("Stopping Server:").render().await?;
 
-    let cfg = Settings::get();
+    let cfg = Config::get();
     let port = cfg.server.port;
 
     // stop server
@@ -202,39 +135,6 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
         .render()
         .await?;
 
-    // stop LMS server
-    if stop_lms {
-        Print::h1("Stopping LMS Server:")
-            .margin_top(1)
-            .render()
-            .await?;
-
-        // unload models first
-        let _ = timeout(
-            TIMEOUT,
-            Command::new("lms").args(["unload", "--all"]).output(),
-        )
-        .await;
-
-        let fields = Print::field("Models", str!("Unloaded".red()));
-
-        let _ = timeout(
-            TIMEOUT,
-            Command::new("lms")
-                .args(["server", "stop"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status(),
-        )
-        .await;
-
-        fields
-            .field("Status", str!("Offline".red()))
-            .render()
-            .await?;
-    }
-
     Print::success("Processes terminated.")
         .margin_top(1)
         .render()
@@ -245,10 +145,10 @@ pub async fn handle_stop(stop_lms: bool) -> Result<()> {
 }
 
 /// API: Handles server restarting.
-pub async fn handle_restart(restart_lms: bool) -> Result<()> {
-    handle_stop(restart_lms).await?;
+pub async fn handle_server_restart() -> Result<()> {
+    handle_server_stop().await?;
     sleep(Duration::from_millis(500)).await;
-    handle_start(restart_lms).await?;
+    handle_server_start().await?;
 
     Ok(())
 }

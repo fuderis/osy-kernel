@@ -2,7 +2,7 @@
 
 use crate::prelude::*;
 
-use boa_engine::{Context, JsValue, Source, value::TryFromJs, vm::RuntimeLimits};
+use boa_engine::{value::TryFromJs, vm::RuntimeLimits, Context, JsValue, Source};
 
 /// JavaScript runtime executor
 pub struct Runtime {
@@ -14,7 +14,7 @@ impl Runtime {
     /// Creates new JavaScript runtime with configured limits.
     pub fn new() -> Self {
         let mut context = Context::default();
-        let runtime_settings = &Settings::get().runtime;
+        let runtime_settings = &Config::get().runtime;
 
         if let Some(limit) = runtime_settings.instruction_limit {
             // creating a limit configuration
@@ -27,7 +27,7 @@ impl Runtime {
     }
 
     /// Evaluates JavaScript and returns the result as a string.
-    #[log(skip_all)]
+    #[log()]
     pub fn eval(&mut self, code: &str) -> Result<String> {
         info!("Executing JS script: {code:80}...");
 
@@ -40,7 +40,7 @@ impl Runtime {
     }
 
     /// Evaluates JavaScript and converts the result to a Rust type.
-    #[log(skip_all)]
+    #[log()]
     pub fn eval_json<T>(&mut self, code: &str) -> Result<T>
     where
         T: TryFromJs,
