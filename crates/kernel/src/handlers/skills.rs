@@ -17,7 +17,7 @@ pub async fn handle_tool_call(
 
     Response::ok().stream(async move |tx| {
         let Some(agent) = Manager::get_by_skill(&skill_name).await else {
-            let err_msg = format!("Agent for skill `{skill_name}` not found");
+            let err_msg = format!("Agent for skill `{skill_name}` not found.");
             error!("[handle_tool_call] {err_msg}");
             let _ = tx.send(Event::Error(err_msg));
             return;
@@ -284,7 +284,7 @@ pub async fn handle_skill(
         iteration += 1;
         if iteration > max_iterations {
             warn!(
-                "Agent `{agent_name}` reached maximum allowed iterations ({max_iterations}) for skill `{skill_name}`"
+                "Agent `{agent_name}` reached maximum allowed iterations ({max_iterations}) for skill `{skill_name}`."
             );
             return Err(Error::Custom(format!(
                 "Agent `{agent_name}` exceeded maximum execution limit of {max_iterations} iterations."

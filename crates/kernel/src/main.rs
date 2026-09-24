@@ -109,12 +109,17 @@ async fn main() -> Result<()> {
             "Executes agent skills directly.",
             |ctx| async move {
                 let skill = ctx.get::<String>("skill")?;
-                let payload = ctx.get::<String>("payload")?;
+
                 match skill.split_once('.') {
                     Some((skill_name, tool_name)) => {
-                        cmds::handle_tool_call(skill_name, tool_name, payload).await
+                        cmds::handle_tool_call(
+                            skill_name,
+                            tool_name,
+                            ctx.get("payload").unwrap_or("{}".into()),
+                        )
+                        .await
                     }
-                    None => cmds::handle_skill_query(skill, payload).await,
+                    None => cmds::handle_skill_query(skill, ctx.get("payload")?).await,
                 }
             },
         )

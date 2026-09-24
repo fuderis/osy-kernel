@@ -285,12 +285,12 @@ where
                                 let formatted_err = if let Some((title, msg)) = err.split_once(':')
                                 {
                                     format!(
-                                        "{}{} {msg}",
-                                        "Error: ".red().bold(),
+                                        "{} {} {msg}",
+                                        "Error:".red().bold(),
                                         title.trim().red().bold(),
                                     )
                                 } else {
-                                    format!("{} {}", "Error: ".red().bold(), err.trim())
+                                    format!("{} {}", "Error:".red().bold(), err.trim())
                                 };
 
                                 status_msg = Some(formatted_err);
@@ -305,6 +305,7 @@ where
                                 DialogEvent::Script { id, code } => {
                                     status_msg =
                                         Some(format!("{}", "Executing script...".italic().dim()));
+
                                     update_ui(
                                         &mut ctx.state,
                                         &full_response,
@@ -468,8 +469,11 @@ where
                             },
 
                             Event::Finish => {
-                                let _ = status_msg.take();
-                                update_ui(&mut ctx.state, &full_response, None);
+                                if !full_response.trim().is_empty() {
+                                    let _ = status_msg.take();
+                                }
+
+                                update_ui(&mut ctx.state, &full_response, status_msg.as_deref());
                                 break;
                             }
                         }

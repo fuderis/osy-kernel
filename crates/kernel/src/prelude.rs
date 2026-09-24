@@ -24,7 +24,7 @@ pub use std::{
 
 // Ecosystem crates
 pub use chrono::{DateTime, Local, Utc};
-pub use macron::{Display, From, arc, arc_mutex, async_recursion, path, str};
+pub use macron::{Display, From, arc, async_recursion, async_trait, path, str};
 pub use pearce::{Bytes, Client, Json, Paths, Query, Receiver, Response, Sender, StreamExt};
 
 // Serialization

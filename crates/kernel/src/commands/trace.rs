@@ -49,18 +49,23 @@ pub async fn handle_trace(uid_filter: Option<u64>, only_new: bool) -> Result<()>
     let mut sources = Vec::new();
 
     // primary kernel source
+    let kernel_name = path!("$")
+        .file_name()
+        .map(|s| str!(s.to_string_lossy()))
+        .unwrap_or("osy".into());
     sources.push(SourceConfig {
-        name: "KERNEL".into(),
-        dir_path: path!("$state/osy/logs"),
+        name: kernel_name.clone(),
+        dir_path: path!("$state/{kernel_name}/logs"),
         entry_start_pattern: Regex::new(r"\b\d{4}-\d{2}-\d{2}").unwrap(),
         color_code: 35,
     });
 
     // dynamic agent sources
     for agent in agents {
-        let agent_dir = path!("$state/osy-{}/logs", agent.name);
+        let agent_name = format!("{kernel_name}-{}", agent.name);
+        let agent_dir = path!("$state/{agent_name}/logs");
         sources.push(SourceConfig {
-            name: agent.name.to_uppercase(),
+            name: agent_name,
             dir_path: agent_dir,
             entry_start_pattern: Regex::new(r"\b\d{4}-\d{2}-\d{2}").unwrap(),
             color_code: 36,
