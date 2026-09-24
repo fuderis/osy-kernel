@@ -4537,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "osy"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "anylm",
  "atoman 0.11.6",
