@@ -37,6 +37,7 @@ pub async fn handle_skill(
         session_info,
         &task.skill,
         Message::user(vec![task.query.into()]),
+        false,
     )
     .await?;
 

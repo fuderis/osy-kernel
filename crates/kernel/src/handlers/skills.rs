@@ -26,22 +26,19 @@ pub async fn handle_skill_query(
     Response::ok().stream(move |tx| async move {
         let result = match Session::read(sid).await {
             Ok((session, _messages)) => {
-                // Сохраняем пользовательское сообщение в сессию
                 if let Err(e) = session.lock().await.write_message(message.clone()).await {
                     error!("[handle_skill_query{{sid={sid}}}] Failed to write user message: {e}");
                     Err(e)
                 } else {
                     let session_info = session.lock().await.info.clone();
 
-                    match handle_skill(tx.clone(), session_info, &skill_name, message).await {
+                    match handle_skill(tx.clone(), session_info, &skill_name, message, true).await {
                         Ok(result_text) => {
-                            // Сохраняем финальный ответ ассистента в сессию
                             let assistant_msg = Message::assistant(vec![result_text.clone().into()],vec![]);
                             if let Err(e) = session.lock().await.write_message(assistant_msg).await {
                                 error!("[handle_skill_query{{sid={sid}}}] Failed to write assistant message: {e}");
                                 Err(e)
                             } else {
-                                let _ = tx.send(Event::Answer(result_text));
                                 let _ = tx.send(Event::Finish);
                                 Ok(())    
                             }
@@ -67,6 +64,7 @@ pub async fn handle_skill(
     session_info: SessionInfo,
     skill_name: &str,
     message: Message,
+    stream_answer: bool
 ) -> Result<String> {
     let Some(agent) = Manager::get_by_skill(skill_name).await else {
         return Err(
@@ -186,6 +184,11 @@ pub async fn handle_skill(
                 while let Some(chunk) = stream.next().await {
                     match chunk {
                         Ok(Chunk::Text(text_part)) => {
+                            if stream_answer {
+                                if let Err(e) = tx.send(Event::Answer(text_part.clone())) {
+                                    warn!("[handle_skill] Failed to stream chunk to client: {e}");
+                                }
+                            }
                             text_response.push_str(&text_part);
                         }
                         Ok(Chunk::Tool(tool_call)) => {
