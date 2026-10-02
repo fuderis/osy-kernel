@@ -3,9 +3,10 @@ use crate::{prelude::*, utils};
 use osy_share::SessionInfo;
 
 // Returns local session info (for CLI chat).
-pub fn session_info() -> SessionInfo {
+pub fn session_info(sid: SessionId) -> SessionInfo {
     let tz_minutes = (chrono::Local::now().offset().local_minus_utc() / 60) as i16;
     SessionInfo {
+        id: sid,
         system_info: Some(utils::system_info_cloned()),
         current_path: std::env::current_dir().ok(),
         timezone: tz_minutes,

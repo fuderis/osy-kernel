@@ -1,190 +1,63 @@
-use crate::{Manager, prelude::*, utils};
+use crate::{
+    Manager,
+    prelude::*,
+    skills::{self, EvalAction, RememberFact, SearchFact},
+    user::{Session, UserState},
+    utils,
+};
 
 use anylm::{
-    api::{Content, Message, Messages, Tool, ToolCall, ToolCallFunction},
+    api::{Content, Message, Messages, Tool},
     completions::{Chunk, Completions},
 };
 use atoman::task::JoinSet;
-use osy_share::{Event, HandleQuery, SessionInfo};
-use pearce::Callback;
-
-/// API: Handles skill tool call.
-pub async fn handle_tool_call(
-    skill_and_tool: Paths<(String, String)>,
-    payload: Json<JsonValue>,
-) -> Response {
-    let (skill_name, tool_name) = skill_and_tool.0;
-
-    Response::ok().stream(async move |tx| {
-        let Some(agent) = Manager::get_by_skill(&skill_name).await else {
-            let err_msg = format!("Agent for skill `{skill_name}` not found.");
-            error!("[handle_tool_call] {err_msg}");
-            let _ = tx.send(Event::Error(err_msg));
-            return;
-        };
-
-        let agent_guard = agent.read().await;
-        let sock_path = agent_guard.metadata.sock_path.to_string_lossy().to_string();
-        let agent_name = agent_guard.metadata.name.clone();
-        drop(agent_guard);
-
-        let tool_call = ToolCall {
-            id: "".into(),
-            kind: "".into(),
-            func: ToolCallFunction {
-                name: tool_name,
-                json_str: payload.0.to_string(),
-            },
-        };
-
-        let client = Client::ipc(&sock_path);
-
-        match handle_tool(
-            client,
-            sock_path,
-            agent_name,
-            skill_name,
-            tool_call,
-            tx.clone(),
-        )
-        .await
-        {
-            Ok((_, result_text)) => {
-                let _ = tx.send(Event::Answer(result_text));
-                let _ = tx.send(Event::Finish);
-            }
-            Err(e) => {
-                error!("[handle_tool_call] Execution failed: {e}");
-                let _ = tx.send(Event::Error(e.to_string()));
-            }
-        }
-    })
-}
+use osy_share::{Event, HandleQuery, SessionId, SessionInfo};
 
 /// API: Handles skill query.
-pub async fn handle_skill_query(skill: Paths<String>, payload: Json<HandleQuery>) -> Response {
-    let HandleQuery { message, info } = payload.0;
-    let skill_name = skill.0;
+pub async fn handle_skill_query(
+    paths: Paths<(SessionId, String)>,
+    payload: Json<HandleQuery>,
+) -> Response {
+    let (sid, skill_name) = paths.0;
+    warn!("HIT: sid={}, skill={}", sid, skill_name);
 
-    Response::ok().stream(async move |tx| {
-        match handle_skill(tx.clone(), info.unwrap_or_default(), &skill_name, message).await {
-            Ok(result_text) => {
-                let _ = tx.send(Event::Answer(result_text));
-                let _ = tx.send(Event::Finish);
-            }
-            Err(e) => {
-                error!("[handle_skill_query] Execution failed: {e}");
-                let _ = tx.send(Event::Error(e.to_string()));
-            }
-        }
-    })
-}
+    let HandleQuery { message } = payload.0;
 
-/// Performs a single call to the agent's tool via IPC.
-#[log()]
-pub async fn handle_tool(
-    client: Client,
-    sock_path: String,
-    agent_name: String,
-    skill_name: String,
-    tool_call: ToolCall,
-    tx: Sender<Bytes>,
-) -> Result<(String, String)> {
-    let func = tool_call.func;
-    let tool_call_id = tool_call.id;
-    let log_json = func.json_str.replace('\n', " ");
+    Response::ok().stream(move |tx| async move {
+        let result = match Session::read(sid).await {
+            Ok((session, _messages)) => {
+                // Сохраняем пользовательское сообщение в сессию
+                if let Err(e) = session.lock().await.write_message(message.clone()).await {
+                    error!("[handle_skill_query{{sid={sid}}}] Failed to write user message: {e}");
+                    Err(e)
+                } else {
+                    let session_info = session.lock().await.info.clone();
 
-    let msg = format!(
-        "Calling `{agent_name}.{skill_name}.{}` tool: {log_json}",
-        func.name
-    );
-    info!("{msg}");
-    tx.send(Event::Thinking(msg)).ok();
-
-    let request_path = format!("/skills/{skill_name}/call/{}", func.name);
-    let request_body = func.parse_args::<JsonValue>()?;
-    let mut response = client
-        .post(&request_path)
-        .header("Content-Type", "application/json")
-        .json(&request_body)
-        .stream::<Event>()
-        .await;
-
-    // error checking and auto-recovery of the agent if necessary
-    if let Err(e) = &response {
-        warn!("Agent `{agent_name}` didn't respond for tool call: {e}");
-        tx.send(Event::Thinking(format!(
-            "Agent `{agent_name}` didn't respond for tool call."
-        )))?;
-
-        if let Some(agent) = Manager::get_agent(&agent_name).await {
-            if agent.read().await.ensure().await.is_ok() {
-                response = Client::ipc(&sock_path)
-                    .post(&request_path)
-                    .header("Content-Type", "application/json")
-                    .json(&request_body)
-                    .stream::<Event>()
-                    .await;
-            }
-        } else {
-            error!("Agent `{agent_name}` is unavailable for now.");
-            return Err(
-                Error::Custom(format!("Agent `{agent_name}` is unavailable for now.")).into(),
-            );
-        }
-    }
-
-    let mut stream = match response {
-        Ok(res) => res,
-        Err(e) => {
-            return Err(Error::Custom(format!(
-                "Agent `{agent_name}` crashed and failed to recover: {e}"
-            ))
-            .into());
-        }
-    };
-
-    let mut full_text = str!();
-
-    while let Some(event) = atoman::select! {
-        _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
-        res = stream.recv() => res?,
-    } {
-        match event {
-            Event::Answer(text) => full_text.push_str(&text),
-            Event::Finish => {}
-            Event::Dialog(d_event) => {
-                let d_event_id = d_event.get_id().to_string();
-                let mut callback = Callback::register(&d_event_id).await;
-                tx.send(Event::Dialog(d_event))?;
-
-                let response = atoman::select! {
-                    _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
-                    res = callback.recv::<JsonValue>(Duration::from_secs(120)) => res?,
-                };
-
-                if let Some(value) = response {
-                    let client = Client::ipc(&sock_path);
-                    let _ = client
-                        .post(&format!("/callback/{d_event_id}"))
-                        .header("Content-Type", "application/json")
-                        .json(&value)
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            Error::Custom(format!(
-                                "Failed to send callback to `{agent_name}` agent: {e}"
-                            ))
-                        })?;
+                    match handle_skill(tx.clone(), session_info, &skill_name, message).await {
+                        Ok(result_text) => {
+                            // Сохраняем финальный ответ ассистента в сессию
+                            let assistant_msg = Message::assistant(vec![result_text.clone().into()],vec![]);
+                            if let Err(e) = session.lock().await.write_message(assistant_msg).await {
+                                error!("[handle_skill_query{{sid={sid}}}] Failed to write assistant message: {e}");
+                                Err(e)
+                            } else {
+                                let _ = tx.send(Event::Answer(result_text));
+                                let _ = tx.send(Event::Finish);
+                                Ok(())    
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }    
                 }
             }
-            event => {
-                let _ = tx.send(event);
-            }
-        }
-    }
+            Err(e) => Err(e),
+        };
 
-    Ok((tool_call_id, full_text))
+        if let Err(e) = result {
+            error!("[handle_skill_query{{sid={sid}}}] Execution failed: {e}");
+            tx.send(Event::Error(e.to_string())).ok();
+        }
+    })
 }
 
 /// Performs agent's skill (creates the context, launches the LLM cycle, self-healing and distribution of sub-tools).
@@ -211,12 +84,13 @@ pub async fn handle_skill(
         ))
         .into());
     };
-    let skill_prompt = skill.prompt.trim().to_owned();
+    let agent_skill_prompt = skill.prompt.trim().to_owned();
     drop(agent_guard);
 
-    // loading agent's list of tools
+    // loading agent's list of tools and combining with skill basic tools
     let client = Client::ipc(&sock_path);
-    let tools = client
+    let mut tools = Manager::skill_basic_tools().await;
+    let agent_tools = client
         .post(&format!("/skills/{skill_name}/tools"))
         .header("Content-Type", "application/json")
         .send()
@@ -228,6 +102,7 @@ pub async fn handle_skill(
         })?
         .json::<Vec<Tool>>()
         .await?;
+    tools.extend(agent_tools);
 
     let msg = format!(
         "Handling `{agent_name}.{skill_name}` skill: \"{}...\"",
@@ -249,13 +124,18 @@ pub async fn handle_skill(
         .temperature(cfg.completions.skill_temp);
     let exec_options = &cfg.execution;
 
-    // assembling context messages
+    // assembling context messages with config skill prompt & agent skill prompt
     let agent_messages = {
         let mut msgs = Messages::new();
         let mut system_content = vec![utils::system_prompt(&session_info, &cfg).into()];
 
-        if !skill_prompt.is_empty() {
-            system_content.push(skill_prompt.into());
+        let config_skill_prompt = cfg.prompts.skill_prompt.trim();
+        if !config_skill_prompt.is_empty() {
+            system_content.push(config_skill_prompt.to_string().into());
+        }
+
+        if !agent_skill_prompt.is_empty() {
+            system_content.push(agent_skill_prompt.into());
         }
 
         msgs.add_system(system_content);
@@ -398,17 +278,49 @@ pub async fn handle_skill(
 
         let mut sub_workers = JoinSet::new();
 
-        // parallel execution of sub-tool calls via handle_tool
+        // parallel execution of sub-tool calls (handling both basic system tools and IPC tools)
         for tool_call in tool_calls {
             let client = client.clone();
             let sock_path = sock_path.clone();
             let agent_name = agent_name.clone();
             let tx = tx.clone();
             let skill_name = skill_name.to_string();
+            let session_info = session_info.clone();
 
             sub_workers.spawn(
                 async move {
-                    handle_tool(client, sock_path, agent_name, skill_name, tool_call, tx).await
+                    match tool_call.func.name.as_str() {
+                        "js_eval" => {
+                            let eval: EvalAction = tool_call.parse_args()?;
+                            tx.send(Event::Thinking(format!(
+                                "Executing JavaScript code: {:80}...",
+                                &eval.code
+                            )))
+                            .ok();
+                            let result = skills::handle_eval(eval).await?;
+                            Ok((tool_call.id, format!("JS Result:\n{result}")))
+                        }
+                        "remember_fact" => {
+                            let act: RememberFact = tool_call.parse_args()?;
+                            let user = UserState::get_or_init(session_info.id.user_id).await?;
+                            let user_guard = user.read().await;
+                            let res_msg = skills::handle_remember_fact(&user_guard, act).await?;
+                            tx.send(Event::Thinking(res_msg.clone())).ok();
+                            Ok((tool_call.id, format!("Memory Operation Result:\n{res_msg}")))
+                        }
+                        "search_fact" => {
+                            let act: SearchFact = tool_call.parse_args()?;
+                            let user = UserState::get_or_init(session_info.id.user_id).await?;
+                            let user_guard = user.read().await;
+                            let res_msg = skills::handle_search_fact(&user_guard, act).await?;
+                            tx.send(Event::Thinking(res_msg.clone())).ok();
+                            Ok((tool_call.id, format!("Memory Operation Result:\n{res_msg}")))
+                        }
+                        _ => {
+                            super::handle_tool(client, sock_path, agent_name, skill_name, tool_call, tx)
+                                .await
+                        }
+                    }
                 }
                 .log_span(Span::current()),
             );

@@ -1,5 +1,3 @@
-use crate::SessionInfo;
-
 use anylm::api::Message;
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +10,6 @@ pub struct ListQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleQuery {
     pub message: Message,
-    pub info: Option<SessionInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

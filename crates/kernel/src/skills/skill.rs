@@ -1,42 +1,36 @@
 use crate::{handlers, prelude::*};
 
-use anylm::api::{Content, Message, Messages, Schema, Tool};
+use anylm::{Content, Message, Messages, Schema, Tool};
 use osy_share::SessionInfo;
 
 /// Returns tools list.
 pub fn tools_list() -> Vec<Tool> {
-    vec![
-        Tool::new("handle_task", "Delegates a task using a specific skill.")
-            .required_property(
-                "skill",
-                Schema::string("The existing skill required for this task."),
-            )
-            .required_property(
-                "query",
-                Schema::string("The detailed task prompt, parameters, and input context."),
-            ),
-    ]
+    vec![Tool::typed::<SkillAction>(
+        "use_skill",
+        "Delegates a task using a specific skill.",
+    )]
 }
 
-/// Agent task data.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct TaskAction {
+/// Agent skill task data.
+#[derive(Deserialize, Schema)]
+pub struct SkillAction {
+    #[schema(skip)]
     #[serde(default)]
     pub tool_call_id: String,
 
-    /// Target skill name.
+    /// The existing skill required for this task.
     pub skill: String,
-    /// Agent task query.
+    /// The detailed task prompt, parameters, and input context.
     pub query: String,
 }
 
-/// Handles agent task (isolated).
+/// Handles agent skill (isolated).
 #[log(skill = %task.skill)]
-pub async fn handle_task(
+pub async fn handle_skill(
     tx: Sender<Bytes>,
     session_info: SessionInfo,
     messages: Arc<Mutex<Messages>>,
-    task: TaskAction,
+    task: SkillAction,
 ) -> Result<()> {
     let skill_response = handlers::handle_skill(
         tx,

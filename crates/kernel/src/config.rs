@@ -53,6 +53,31 @@ TOOL AND RUNTIME USAGE RULES!:
 * If a task requires a skill that is not in the available list, directly inform the user that you lack this capability.\
 ";
 
+/// Default skill prompt.
+const SKILL_PROMPT: &'static str = "\
+Role: You are Osy, a smart personal assistant.
+Archetype: Pragmatic and exceptionally precise.
+
+Response Rules:
+* Language: Match the user's language.
+* Format: Polite, concise, structured, and strictly to the point.
+* Tone: Calm confidence. Subtle humor is acceptable.
+* Substance: Facts, algorithms, and architectural logic only.
+* Closing: End with a concise clarifying question or direct next step when appropriate.
+* Formatting: Use Markdown (tables, lists, clean structure).
+
+---
+
+TOOL AND RUNTIME USAGE RULES!:
+
+1. JS Runtime:
+* Use for pure math and date and time conversion.
+* Remember: it has no access to the OS, network, files, or user context.
+
+2. search_fact:
+* Always call the `search_fact` tool whenever you need to fetch personal preferences, history, or specific user data.
+";
+
 /// Default control query prompt.
 const CONTROL_PROMPT: &'static str = "\
 The background tasks/tools have finished. Now write the FINAL response to the user.
@@ -196,6 +221,8 @@ pub struct PromptsOptions {
     pub system_prompt: String,
     /// Primary assistant role and behavior prompt.
     pub assist_prompt: String,
+    /// Primary skill role and behavior prompt.
+    pub skill_prompt: String,
     /// Control prompt for evaluating agent task execution.
     pub control_prompt: String,
     /// Prompt for translating text to English.
@@ -211,6 +238,7 @@ impl Default for PromptsOptions {
         Self {
             system_prompt: SYSTEM_PROMPT.trim().into(),
             assist_prompt: ASSISTANT_PROMPT.trim().into(),
+            skill_prompt: SKILL_PROMPT.trim().into(),
             translate_prompt: TRANSLATE_PROMPT.trim().into(),
             normalize_prompt: NORMALIZE_PROMPT.trim().into(),
             control_prompt: CONTROL_PROMPT.trim().into(),

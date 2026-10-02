@@ -40,93 +40,112 @@ async fn main() -> Result<()> {
     Config::init(path!("$config$/config.toml")).await?;
 
     // handle arguments
-    if let Err(e) = Commands::new()
-        .meta(pkg_meta!())
-        .hide_cmd("serve", "Serve the kernel server (internal).", serve)
-        //    SERVER
-        .group("server", "Server management commands.")
-        .cmd(
-            "server status",
-            "Check the status of kernel server.",
-            |_| async move { cmds::handle_server_status().await },
-        )
-        .cmd(
-            "server start",
-            "Start the kernel server in the background.",
-            |_| async move { cmds::handle_server_start().await },
-        )
-        .cmd(
-            "server stop",
-            "Stop the server by killing the port process.",
-            |_| async move { cmds::handle_server_stop().await },
-        )
-        .cmd(
-            "server restart",
-            "Restart the ecosystem (stop -> start).",
-            |_| async move { cmds::handle_server_restart().await },
-        )
-        //    HEALTH
-        .cmd(
-            "status",
-            "Check the status of all ecosystem components.",
-            |_| async move { cmds::handle_health_status().await },
-        )
-        .cmd(
-            "refresh",
-            "Refresh the server settings & agents list.",
-            |_| async move { cmds::handle_health_refresh().await },
-        )
-        .cmd(
-            "config",
-            "Open settings.toml in the default system editor.",
-            |_| async move { cmds::handle_health_config().await },
-        )
-        //    CHAT
-        .cmd(
-            "chat -u|--uid=1 -n|--new=false -l|--load=false -s|--sudo=false",
-            "Enter interactive AI chat mode.",
-            |ctx| async move {
-                let uid = ctx.get("uid")?;
-                let new_session = ctx.get("new")?;
-                let load_history = ctx.get("load")?;
-                let use_sudo = ctx.get("sudo")?;
-                cmds::handle_chat(uid, new_session, load_history, use_sudo).await
-            },
-        )
-        //    TRACING
-        .cmd(
-            "trace -u|--uid= -n|--new=true",
-            "Trace live ecosystem log files dynamically.",
-            |ctx| async move {
-                let uid = ctx.get_opt::<u64>("uid")?;
-                let only_new = ctx.get("new")?;
-                cmds::handle_trace(uid, only_new).await
-            },
-        )
-        //    SKILLS
-        .cmd(
-            "do {skill} {payload..}",
-            "Executes agent skills directly.",
-            |ctx| async move {
-                let skill = ctx.get::<String>("skill")?;
-
-                match skill.split_once('.') {
-                    Some((skill_name, tool_name)) => {
-                        cmds::handle_tool_call(
-                            skill_name,
-                            tool_name,
-                            ctx.get("payload").unwrap_or("{}".into()),
-                        )
-                        .await
-                    }
-                    None => cmds::handle_skill_query(skill, ctx.get("payload")?).await,
-                }
-            },
-        )
-        .run()
-        .await
+    if let Err(e) =
+        Commands::new()
+            .meta(pkg_meta!())
+            .hide_cmd("serve", "Serve the kernel server (internal).", serve)
+            //    SERVER
+            .group("server", "Server management commands.")
+            .cmd(
+                "server status",
+                "Check the status of kernel server.",
+                |_| async move { cmds::handle_server_status().await },
+            )
+            .cmd(
+                "server start",
+                "Start the kernel server in the background.",
+                |_| async move { cmds::handle_server_start().await },
+            )
+            .cmd(
+                "server stop -f|--force=false",
+                "Stop the server by killing the port process.",
+                |ctx| async move { cmds::handle_server_stop(ctx.get("force")?).await },
+            )
+            .cmd(
+                "server restart -f|--force=false",
+                "Restart the ecosystem (stop -> start).",
+                |ctx| async move { cmds::handle_server_restart(ctx.get("force")?).await },
+            )
+            //    HEALTH
+            .cmd(
+                "status",
+                "Check the status of all ecosystem components.",
+                |_| async move { cmds::handle_health_status().await },
+            )
+            .cmd(
+                "refresh",
+                "Refresh the server settings & agents list.",
+                |_| async move { cmds::handle_health_refresh().await },
+            )
+            .cmd(
+                "config",
+                "Open settings.toml in the default system editor.",
+                |_| async move { cmds::handle_health_config().await },
+            )
+            //    CHAT
+            .cmd(
+                "chat -u|--uid=1 --sid= -n|--new=false -l|--load=false -s|--skill=",
+                "Enter interactive AI chat mode.",
+                |ctx| async move {
+                    cmds::handle_chat(
+                        ctx.get("uid")?,
+                        ctx.get_opt("sid")?,
+                        ctx.get("new")?,
+                        ctx.get("load")?,
+                        ctx.get_opt("skill")?,
+                    )
+                    .await
+                },
+            )
+            //    TRACING
+            .cmd(
+                "trace -u|--uid= -n|--new=true",
+                "Trace live ecosystem log files dynamically.",
+                |ctx| async move {
+                    cmds::handle_trace(ctx.get_opt::<u64>("uid")?, ctx.get("new")?).await
+                },
+            )
+            //    SKILLS
+            .cmd(
+                "do {skill} {payload..} -u|--uid=0 --sid= -n|--new=false -l|--load=false",
+                "Executes agent skills directly.",
+                handle_skill_execution,
+            )
+            .hide_cmd(
+                "{skill} {payload..} -u|--uid=0 --sid= -n|--new=false -l|--load=false",
+                "Executes agent skills directly.",
+                handle_skill_execution,
+            )
+            .run()
+            .await
     {
         eprintln!("{} {e}", "Error:".red().bold());
+    }
+
+    async fn handle_skill_execution(ctx: rigging::CommandContext) -> Result<()> {
+        let skill = ctx.get::<String>("skill")?;
+
+        match skill.split_once('.') {
+            Some((skill_name, tool_name)) => {
+                cmds::handle_tool_call(
+                    skill_name,
+                    tool_name,
+                    ctx.get_opt("payload")?.unwrap_or("{}".into()),
+                )
+                .await
+            }
+            None => {
+                cmds::handle_skill_query(
+                    ctx.get("uid")?,
+                    ctx.get_opt("sid")?,
+                    ctx.get("new")?,
+                    ctx.get("load")?,
+                    skill,
+                    ctx.get("payload")?,
+                )
+                .await
+            }
+        }
     }
 
     Ok(())
@@ -177,10 +196,12 @@ async fn serve(_: CommandContext) -> Result<()> {
             "/sessions/{sid}/rules/clear",
             hands::handle_session_rules_clear,
         )
-        //      QUERY
+        //      QUERIES
+        .post(
+            "/sessions/{sid}/skills/{skill}/query",
+            hands::handle_skill_query,
+        )
         .post("/sessions/{sid}/query", hands::handle_user_query)
-        //      SKILLS
-        .post("/skills/{skill}/query", hands::handle_skill_query)
         .post("/skills/{skill}/call/{tool}", hands::handle_tool_call)
         .callback(true)
         .run(Config::get().server.port)

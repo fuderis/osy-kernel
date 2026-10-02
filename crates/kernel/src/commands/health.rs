@@ -9,7 +9,7 @@ pub async fn handle_health_refresh() -> Result<()> {
     let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
-    Print::h1("Kernel Server:").render().await?;
+    Print::h1("Refreshing server:").render().await?;
 
     // refreshing server
     match client
@@ -70,7 +70,7 @@ pub async fn handle_health_status() -> Result<()> {
     let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
-    Print::h1("Kernel Server:").render().await?;
+    Print::h1("Checking server:").render().await?;
 
     // checking server
     match client
@@ -133,7 +133,7 @@ pub async fn handle_health_status() -> Result<()> {
 pub async fn handle_health_config() -> Result<()> {
     let path = Config::path();
 
-    Print::h1("Configuration:").render().await?;
+    Print::h1("Opening config:").render().await?;
     Print::field("Path", str!(path.to_string_lossy().magenta()))
         .render()
         .await?;

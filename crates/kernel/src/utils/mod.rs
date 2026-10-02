@@ -9,11 +9,14 @@ pub use context::*;
 pub mod prompt;
 pub use prompt::*;
 
-pub mod sudo;
-pub use sudo::*;
-
 pub mod cli;
 pub use cli::*;
+
+pub mod input;
+pub use input::*;
+
+pub mod response;
+pub use response::*;
 
 pub mod args;
 pub use args::*;

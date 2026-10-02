@@ -88,22 +88,34 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "anylm"
-version = "0.3.4"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e60780f0cc10ea66d8a7cb11bd328212c261c28a1a39504b324147dff5a1c551"
+checksum = "490988285149fcade2fb4ad0cd30c3ba5b3fe72453adbc92cd73e5c624392a72"
 dependencies = [
- "atoman 0.11.6",
+ "anylm-schema",
+ "atoman 0.11.8",
  "base64",
  "bytes",
  "chrono",
  "futures",
- "macron 0.5.1",
+ "macron 0.5.2",
  "pearce",
  "regex",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "anylm-schema"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a82828247d809c61d936c682a266f41bae9cdc6f3c5303885efec84c5180d79c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -444,22 +456,9 @@ dependencies = [
 
 [[package]]
 name = "atoman"
-version = "0.10.2"
+version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9997d3b7f7afad75acd734a807b09cb8d4b3218ba3049481f84893049c7226db"
-dependencies = [
- "ahash",
- "arc-swap",
- "macron 0.5.1",
- "once_cell",
- "tokio",
-]
-
-[[package]]
-name = "atoman"
-version = "0.11.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6846bfbf8dcf8b748dfda9dbb79eb3a7ad59e974a7fc50af79988391fabfb82d"
+checksum = "9e93c3dbd203d23c34c3ed4a205f7c8b0e17ecdaa9303083f1cb01d91e6bfc9f"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -470,7 +469,7 @@ dependencies = [
  "chrono",
  "colored",
  "fuzzy-cmp",
- "macron 0.5.1",
+ "macron 0.5.2",
  "once_cell",
  "regex",
  "serde",
@@ -3968,9 +3967,9 @@ dependencies = [
 
 [[package]]
 name = "macron"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1210dfbeb80bf8776ca559136396d95a1f00dc689683a017fa844241acfbc1cf"
+checksum = "34ef732b61f40f1389705c10933930f022e9209760d5c06338407973ee8eca9c"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -4537,15 +4536,15 @@ dependencies = [
 
 [[package]]
 name = "osy"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anylm",
- "atoman 0.11.6",
+ "atoman 0.11.8",
  "boa_engine",
  "chrono",
  "cistern",
  "libc",
- "macron 0.5.1",
+ "macron 0.5.2",
  "osy-share",
  "pearce",
  "rand 0.10.1",
@@ -4562,9 +4561,9 @@ name = "osy-share"
 version = "0.0.0"
 dependencies = [
  "anylm",
- "atoman 0.11.6",
+ "atoman 0.11.8",
  "chrono",
- "macron 0.5.1",
+ "macron 0.5.2",
  "pearce",
  "rand 0.10.1",
  "rigging",
@@ -4666,17 +4665,17 @@ dependencies = [
 
 [[package]]
 name = "pearce"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b21a1fc6740546aa2e5491dd7b29b28ee83a1d360e5a791ac7c9128317ee307a"
+checksum = "ac485c04005174c6178c9d5612d093fa3e0b8f999e967071bd676073db26c1af"
 dependencies = [
- "atoman 0.11.6",
+ "atoman 0.11.8",
  "axum",
  "bytes",
  "futures",
  "hyper",
  "hyper-util",
- "macron 0.5.1",
+ "macron 0.5.2",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -5353,16 +5352,16 @@ dependencies = [
 
 [[package]]
 name = "rigging"
-version = "0.5.3"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "999b3ba3c8ff3788cd4dd5d87673206fb1aa513696f6b1090ab840b39c600265"
+checksum = "63251cb2c7dbbee51274aa79cb06160aca13459a5f276ea8e8e02edd8b41b115"
 dependencies = [
  "adot-tree-sitter-toml",
  "async-trait",
- "atoman 0.10.2",
+ "atoman 0.11.8",
  "crossterm",
  "heck 0.5.0",
- "macron 0.5.1",
+ "macron 0.5.2",
  "markdown",
  "serde",
  "strip-ansi-escapes",

@@ -10,7 +10,7 @@ pub async fn handle_server_status() -> Result<()> {
     let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
-    Print::h1("Kernel Server:").render().await?;
+    Print::h1("Checking server:").render().await?;
 
     // checking server
     match client
@@ -72,7 +72,7 @@ pub async fn handle_server_status() -> Result<()> {
 
 /// API: Handles server launching.
 pub async fn handle_server_start() -> Result<()> {
-    Print::h1("Starting Server:").render().await?;
+    Print::h1("Starting server:").render().await?;
 
     let cfg = Config::get();
 
@@ -108,25 +108,28 @@ pub async fn handle_server_start() -> Result<()> {
 }
 
 /// API: Handles server shutdown.
-pub async fn handle_server_stop() -> Result<()> {
-    Print::h1("Stopping Server:").render().await?;
+pub async fn handle_server_stop(force: bool) -> Result<()> {
+    Print::h1("Stopping server:").render().await?;
 
     let cfg = Config::get();
     let port = cfg.server.port;
 
-    // stop server
     #[cfg(unix)]
     {
-        let _ = Command::new("sh")
-            .args(["-c", &format!("fuser -k {}/tcp", port)])
+        let signal = if force { "-9" } else { "-15" };
+
+        let _ = Command::new("fuser")
+            .args(["-k", signal, &format!("{port}/tcp")])
             .output()
             .await;
     }
+
     #[cfg(windows)]
     {
+        let force_flag = if force { "/f /t" } else { "/f" };
         let cmd = format!(
-            "for /f \"tokens=5\" %a in ('netstat -aon ^| findstr \":{}\"') do taskkill /f /pid %a",
-            port
+            "for /f \"tokens=5\" %a in ('netstat -aon ^| findstr \":{}\"') do taskkill {} /pid %a",
+            port, force_flag
         );
         let _ = Command::new("cmd").args(["/C", &cmd]).output().await;
     }
@@ -135,18 +138,21 @@ pub async fn handle_server_stop() -> Result<()> {
         .render()
         .await?;
 
-    Print::success("Processes terminated.")
-        .margin_top(1)
-        .render()
-        .await?;
+    let msg = if force {
+        "Processes forcibly killed by port."
+    } else {
+        "Processes terminated by port."
+    };
+
+    Print::success(msg).margin_top(1).render().await?;
     println!();
 
     Ok(())
 }
 
 /// API: Handles server restarting.
-pub async fn handle_server_restart() -> Result<()> {
-    handle_server_stop().await?;
+pub async fn handle_server_restart(force: bool) -> Result<()> {
+    handle_server_stop(force).await?;
     sleep(Duration::from_millis(500)).await;
     handle_server_start().await?;
 

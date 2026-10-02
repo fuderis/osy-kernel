@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
 use anylm::{
-    api::{Messages, Schema},
+    IntoSchema, Messages, Schema,
     completions::{Chunk, Completions},
     embeddings::{Embeddings, Search},
 };
@@ -36,14 +36,16 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
         .user(vec![raw_text.into()])
         .wrap();
 
+    /// Normalized fact search structure.
+    #[derive(Deserialize, Schema)]
+    struct NormalizedFact {
+        /// Normalized search text for embeddings.
+        search_text: String,
+    }
+
     let res = async {
         let mut response = Completions::try_from(provider_options.clone())?
-            .schema(
-                Schema::object("Normalized fact search structure").required_property(
-                    "search_text",
-                    Schema::string("Normalized search text for embeddings"),
-                ),
-            )
+            .schema(NormalizedFact::schema())
             .send(messages)
             .await?;
 
@@ -52,11 +54,6 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
             if let Chunk::Text(text) = chunk? {
                 json_str.push_str(&text);
             }
-        }
-
-        #[derive(Deserialize)]
-        struct NormalizedFact {
-            search_text: String,
         }
 
         let parsed: NormalizedFact = serde_json::from_str(&json_str)?;
@@ -95,13 +92,15 @@ pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String
         .user(vec![text.into()])
         .wrap();
 
+    /// Search query translation structure.
+    #[derive(Deserialize, Schema)]
+    struct TranslatedQuery {
+        /// Clear English translation of the search query.
+        translated_text: String,
+    }
+
     let mut response = Completions::try_from(provider_options.clone())?
-        .schema(
-            Schema::object("Search query translation structure").required_property(
-                "translated_text",
-                Schema::string("Clear English translation of the search query"),
-            ),
-        )
+        .schema(TranslatedQuery::schema())
         .send(messages)
         .await?;
 
@@ -110,11 +109,6 @@ pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String
         if let Chunk::Text(text) = chunk? {
             json_str.push_str(&text);
         }
-    }
-
-    #[derive(Deserialize)]
-    struct TranslatedQuery {
-        translated_text: String,
     }
 
     Ok(serde_json::from_str::<TranslatedQuery>(&json_str)

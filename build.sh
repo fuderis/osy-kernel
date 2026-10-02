@@ -6,6 +6,7 @@ set -Eeuo pipefail
 # Configuration
 ###############################################################################
 
+SERVER_PORT=7878
 INSTALL_DIR="/usr/local/bin"
 
 
@@ -93,9 +94,27 @@ trap cleanup EXIT
 # Stop Running Server
 ###############################################################################
 
-if command -v osy >/dev/null 2>&1; then
-    osy server stop >/dev/null 2>&1 || true
+header "Stopping running services"
+
+# Очищаем порт SERVER_PORT ($SERVER_PORT/tcp)
+if command -v fuser >/dev/null 2>&1; then
+    if [[ -w "$INSTALL_DIR" ]]; then
+        fuser -k -9 "${SERVER_PORT}/tcp" >/dev/null 2>&1 || true
+    else
+        sudo fuser -k -9 "${SERVER_PORT}/tcp" >/dev/null 2>&1 || true
+    fi
+elif command -v lsof >/dev/null 2>&1; then
+    PIDS=$(lsof -t -i:"${SERVER_PORT}" 2>/dev/null || true)
+    if [[ -n "$PIDS" ]]; then
+        if [[ -w "$INSTALL_DIR" ]]; then
+            kill -9 $PIDS >/dev/null 2>&1 || true
+        else
+            sudo kill -9 $PIDS >/dev/null 2>&1 || true
+        fi
+    fi
 fi
+
+ok "Port ${SERVER_PORT} cleared"
 
 
 ###############################################################################

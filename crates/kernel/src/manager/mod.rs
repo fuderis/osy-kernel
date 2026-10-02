@@ -16,9 +16,14 @@ pub static MANAGER: State<Manager> = State::default();
 /// Agents manager.
 #[derive(Default, Clone)]
 pub struct Manager {
+    /// Connected agents list.
     pub agents: Arc<SharedMap<String, Agent>>,
+    /// Agents list documentation (skills).
     pub agents_doc: Arc<String>,
+    /// Full set of tools for orchestrator (includes `use_skill`).
     pub tools: Arc<Vec<Tool>>,
+    /// Basic set of tools for skills scope (excludes `use_skill`).
+    pub skill_tools: Arc<Vec<Tool>>,
 }
 
 impl Manager {
@@ -69,16 +74,23 @@ impl Manager {
 
     /// Generates & sets the basic tools schemes.
     pub async fn gen_basic_tools() {
-        let tools = vec![
-            skills::eval::tools_list(),
-            skills::task::tools_list(),
-            skills::fact::tools_list(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let eval_tools = skills::eval::tools_list();
+        let fact_tools = skills::fact::tools_list();
+        let skill_tools = skills::skill::tools_list();
 
-        MANAGER.lock().await.tools = arc!(tools);
+        // full list of tools for main orchestrator
+        let tools: Vec<Tool> = vec![eval_tools.clone(), fact_tools.clone(), skill_tools]
+            .into_iter()
+            .flatten()
+            .collect();
+
+        // skill-level basic tools (without use_skill to prevent recursion)
+        let skill_basic_tools: Vec<Tool> =
+            vec![eval_tools, fact_tools].into_iter().flatten().collect();
+
+        let mut guard = MANAGER.lock().await;
+        guard.tools = arc!(tools);
+        guard.skill_tools = arc!(skill_basic_tools);
     }
 
     /// Checks & updates agents list.
@@ -147,9 +159,14 @@ impl Manager {
         MANAGER.get().agents_doc.clone()
     }
 
-    /// Returns basic tools list.
+    /// Returns basic tools list for main orchestrator.
     pub async fn basic_tools() -> Vec<Tool> {
         (*MANAGER.get().tools).clone()
+    }
+
+    /// Returns basic tools list for skill execution context.
+    pub async fn skill_basic_tools() -> Vec<Tool> {
+        (*MANAGER.get().skill_tools).clone()
     }
 
     /// Returns agents list.

@@ -1,7 +1,7 @@
 use crate::{
     manager::Manager,
     prelude::*,
-    skills::{self, EvalAction, TaskAction},
+    skills::{self, EvalAction, RememberFact, SearchFact, SkillAction},
     user::{Session, UserState},
     utils,
 };
@@ -16,8 +16,9 @@ use pearce::Callback;
 use rigging::widgets::Confirmation;
 
 /// API: User query handler.
-pub async fn handle_user_query(Paths(sid): Paths<SessionId>, data: Json<HandleQuery>) -> Response {
-    let HandleQuery { message, .. } = data.0;
+pub async fn handle_user_query(paths: Paths<SessionId>, data: Json<HandleQuery>) -> Response {
+    let sid = paths.0;
+    let HandleQuery { message } = data.0;
 
     Response::ok().stream(move |tx| async move {
         let result = match Session::read(sid).await {
@@ -174,7 +175,7 @@ async fn handle_query(
                         tx.send(Event::Answer(text_part))?;
                     }
                     Ok(Chunk::Tool(tool_call)) => match tool_call.func.name.as_ref() {
-                        "handle_task" => match tool_call.parse_args::<TaskAction>() {
+                        "use_skill" => match tool_call.parse_args::<SkillAction>() {
                             Ok(mut task) => {
                                 task.tool_call_id = tool_call.id;
                                 agent_tasks.push(task);
@@ -192,7 +193,7 @@ async fn handle_query(
                                 break;
                             }
                         },
-                        "remember_fact" => match tool_call.parse_args::<osy_share::SetQuery>() {
+                        "remember_fact" => match tool_call.parse_args::<RememberFact>() {
                             Ok(act) => {
                                 match {
                                     let user = UserState::get_or_init(sid.user_id).await?;
@@ -213,7 +214,7 @@ async fn handle_query(
                                 break;
                             }
                         },
-                        "search_fact" => match tool_call.parse_args::<osy_share::SearchQuery>() {
+                        "search_fact" => match tool_call.parse_args::<SearchFact>() {
                             Ok(act) => {
                                 match {
                                     let user = UserState::get_or_init(sid.user_id).await?;
@@ -344,7 +345,7 @@ async fn handle_query(
 
                 workers.spawn(
                     async move {
-                        skills::handle_task(tx, session.lock().await.info.clone(), messages, task)
+                        skills::handle_skill(tx, session.lock().await.info.clone(), messages, task)
                             .await
                     }
                     .log_span(Span::current()),
@@ -376,7 +377,7 @@ async fn handle_query(
             }
         }
 
-        // Если выполнение тасок упало после max_retries внутри handle_task
+        // if task execution has dropped after max_retries inside handle_task
         if let Some(err) = execution_error {
             tx.send(Event::Error(err.to_string())).ok();
             let prompt =
@@ -452,8 +453,11 @@ async fn ask_retry(tx: &Sender<Bytes>, prompt: String) -> Result<bool> {
 
     let response = atoman::select! {
         _ = tx.closed() => return Err(Error::ConnectionClosed.into()),
-        res = callback.recv::<bool>(Duration::from_secs(300)) => res,
+        res = callback.recv::<Confirmation>(Duration::from_secs(300)) => res,
     };
 
-    Ok(response.unwrap_or(Some(false)).unwrap_or(false))
+    Ok(match response.unwrap_or(None) {
+        Some(Confirmation::Yes) | Some(Confirmation::Always) => true,
+        _ => false,
+    })
 }
