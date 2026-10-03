@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 use anylm::api::{Message, Messages, Role, Visibility};
 use atoman::Command;
-use osy_share::{ListQuery, SessionId};
+use osy_share::{ListQuery, SessionId, SessionMetadata};
 use rigging::{
     Stylize,
     render::Block,
@@ -80,21 +80,30 @@ pub async fn select_session(
         .send()
         .await?;
 
-    if let Ok(sessions) = response.json::<Vec<SessionId>>().await {
+    if let Ok(sessions) = response.json::<Vec<SessionMetadata>>().await {
         if !sessions.is_empty() {
-            let items: Vec<String> = sessions.iter().map(|sid| sid.to_string()).collect();
+            let items: Vec<String> = sessions
+                .iter()
+                .map(|s| {
+                    if let Some(t) = &s.title {
+                        format!("{} — {t}", s.session_id)
+                    } else {
+                        s.session_id.to_string()
+                    }
+                })
+                .collect();
 
             if let Some(selected_idx) = select_widget("Select a session to connect:", items)
                 .render()
                 .await?
             {
-                if let Some(selected_sid) = sessions.get(selected_idx) {
-                    return Ok(Some(*selected_sid));
+                if let Some(selected) = sessions.get(selected_idx) {
+                    return Ok(Some(selected.session_id));
                 }
             }
 
             // if user canceled (Esc / None) - take most recent session
-            return Ok(sessions.into_iter().next());
+            return Ok(sessions.first().map(|s| s.session_id));
         }
     }
 

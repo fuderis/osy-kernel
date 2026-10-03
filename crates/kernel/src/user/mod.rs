@@ -3,9 +3,6 @@
 pub mod session;
 pub use session::Session;
 
-pub mod metadata;
-pub use metadata::{SessionMetadata, UserMetadata};
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +10,7 @@ use crate::{prelude::*, utils};
 
 use anylm::embeddings::Search;
 use cistern::{Context, ContextRecord, Storage, gen_id};
-use osy_share::{SessionId, UserFact, UserRule};
+use osy_share::{SessionId, SessionMetadata, UserFact, UserMetadata, UserRule};
 
 /// User states map {uid => state}.
 static USER_STATES: SharedMap<u64, UserState> = SharedMap::new();
@@ -65,20 +62,53 @@ impl UserState {
         })
     }
 
-    /// Returns list of user sessions (ordered by freshness).
-    pub async fn list_sessions(id: u64, limit: usize) -> Result<Vec<SessionId>> {
-        let user = Self::get_or_init(id).await?;
-        let guard = user.read().await;
+    /// Returns list of user sessions metadata (ordered by freshness).
+    pub async fn list_sessions(id: u64, limit: usize) -> Result<Vec<SessionMetadata>> {
+        let session_ids = {
+            let user = Self::get_or_init(id).await?;
+            let guard = user.read().await;
+            guard.load_metadata().await?.unwrap_or_default().sessions
+        };
 
-        let meta = guard.load_metadata().await?.unwrap_or_default();
-        let mut sessions = meta.sessions;
-
-        sessions.reverse();
-        if limit > 0 && sessions.len() > limit {
-            sessions.truncate(limit);
+        let mut session_ids = session_ids;
+        session_ids.reverse();
+        if limit > 0 && session_ids.len() > limit {
+            session_ids.truncate(limit);
         }
 
-        Ok(sessions)
+        let mut result = Vec::with_capacity(session_ids.len());
+        for sid in session_ids {
+            // check active session in memory to avoid redundant DB reads
+            if let Some(session) = session::Session::get(&sid).await {
+                let meta = session.lock().await.metadata.clone();
+                result.push(meta);
+            } else {
+                // retrieve from disk for offline sessions
+                let user_base = path!("$share$/users/{id}");
+                let session_dir = user_base.join("sessions").join(sid.to_string());
+
+                if let Ok(kv_db) = Storage::connect(session_dir).await {
+                    let table_name = str!(sid);
+                    if let Ok(table) = kv_db.open_table(&table_name).await {
+                        if let Ok(Some(meta)) = table
+                            .read::<_, SessionMetadata>(session::Key::Metadata)
+                            .await
+                        {
+                            result.push(meta);
+                            continue;
+                        }
+                    }
+                }
+
+                // fallback if metadata file is missing or corrupted
+                result.push(SessionMetadata {
+                    session_id: sid,
+                    ..Default::default()
+                });
+            }
+        }
+
+        Ok(result)
     }
 
     /// Loads user's metadata from database.

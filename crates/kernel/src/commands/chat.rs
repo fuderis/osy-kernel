@@ -21,7 +21,7 @@ pub async fn handle_chat(
     utils::ensure_server(&client, &base_url).await?;
 
     // select session or create new
-    let sid = if new_session {
+    let sid = if new_session || uid == 0 {
         SessionId::new(uid)
     } else {
         if let Some(session_id) = sid {
@@ -85,7 +85,7 @@ pub async fn handle_chat(
     let res = run_loop.await;
 
     // flush backend state and finalize active chat session cleanly
-    Print::h1("Flushing DB records and closing session cleanly...")
+    Print::h1("Flushing database and closing session...")
         .render()
         .await?;
     let final_sid = session_id.lock().await.clone();

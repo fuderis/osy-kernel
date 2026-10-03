@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
                 "Executes agent skills directly.",
                 handle_skill_execution,
             )
-            .hide_cmd(
+            .cmd(
                 "{skill} {payload..} -u|--uid=0 --sid= -n|--new=false -l|--load=false",
                 "Executes agent skills directly.",
                 handle_skill_execution,
@@ -178,10 +178,13 @@ async fn serve(_: CommandContext) -> Result<()> {
         .post("/users/{uid}/rules/remove", hands::handle_user_rules_remove)
         .post("/users/{uid}/rules/clear", hands::handle_user_rules_clear)
         //      SESSIONS
+        .post("/sessions/{sid}/metadata", hands::handle_session_metadata)
         .post("/sessions/{sid}/init", hands::handle_session_init)
         .post("/sessions/{sid}/finish", hands::handle_session_finish)
+        .post("/sessions/{sid}/rename", hands::handle_session_rename)
         .post("/sessions/{sid}/compact", hands::handle_session_compact)
         .post("/sessions/{sid}/clear", hands::handle_session_clear)
+        .post("/sessions/{sid}/remove", hands::handle_session_remove)
         .post("/sessions/{sid}/clone", hands::handle_session_clone)
         .post(
             "/sessions/{sid}/rules/list",

@@ -48,7 +48,7 @@ pub async fn handle_skill_query(
     utils::ensure_server(&client, &base_url).await?;
 
     // select session or create new
-    let sid = if new_session {
+    let sid = if new_session || uid == 0 {
         SessionId::new(uid)
     } else {
         if let Some(session_id) = sid {

@@ -1,13 +1,70 @@
 use crate::prelude::*;
 
 use osy_share::{
-    CompactQuery, Event, ListQuery, RemoveQuery, SearchQuery, SessionId, SetQuery, UserFact,
-    UserRule,
+    CompactQuery, Event, ListQuery, RemoveQuery, RenameQuery, SearchQuery, SessionId, SetQuery,
+    UserFact, UserRule,
 };
 use rigging::{
     Stylize,
     style::{Align, SpinnerStyle},
 };
+
+#[derive(serde::Deserialize)]
+struct CloneResponse {
+    id: SessionId,
+}
+
+/// Helper for safe string truncation (UTF-8 / Cyrillic aware).
+pub fn truncate(s: &str, max_len: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count > max_len {
+        let truncated: String = s.chars().take(max_len).collect();
+        format!("\"{truncated}...\"")
+    } else {
+        format!("\"{s}\"")
+    }
+}
+
+/// Renders a message in the interactive text widget.
+pub async fn render_msg(msg: impl Into<String>) -> Result<()> {
+    let msg = msg.into();
+    super::text_widget("")
+        .handler(move |mut ctx| async move {
+            *ctx.state = msg;
+            ctx.finish();
+        })
+        .render()
+        .await
+        .map_err(|e| e.into())
+}
+
+/// Generic helper to perform POST requests and handle HTTP/network errors consistently.
+async fn send_post<T: serde::Serialize>(
+    client: &Client,
+    url: &str,
+    json: Option<&T>,
+) -> StdResult<pearce::client::Response, String> {
+    let mut req = client.post(url);
+    if let Some(body) = json {
+        req = req.json(body);
+    }
+    match req.send().await {
+        Ok(res) => {
+            let status = res.status();
+            if status.is_success() {
+                Ok(res)
+            } else {
+                let err_body = res.text().await.unwrap_or_default();
+                if err_body.trim().is_empty() {
+                    Err(format!("Server returned status code: {status}"))
+                } else {
+                    Err(format!("Error [{status}]: {err_body}"))
+                }
+            }
+        }
+        Err(e) => Err(format!("Network/Transport error: {e}")),
+    }
+}
 
 /// Renders CLI input widget.
 pub async fn render_input(
@@ -21,7 +78,6 @@ pub async fn render_input(
         let alt_color = cfg.theme.alt_color();
         let base_url = base_url.clone();
 
-        // --- Phase A: User Input ---
         // capture multiline user input from interactive terminal widget
         let user_query = super::input_widget()
             .placeholder("Enter instructions...".with(alt_color))
@@ -47,51 +103,40 @@ pub async fn render_input(
             continue;
         }
 
-        // --- Command Handling ---
         // evaluate and dispatch slash command instructions
         if trimmed.starts_with('/') {
             let args: Vec<&str> = trimmed.split_whitespace().collect();
             let is_global = args.iter().any(|&a| a == "-g");
 
-            // the main command name (e.g., "facts", "rules", "remember")
-            let cmd = args[0].trim_start_matches('/').to_lowercase();
-
-            // the second word (action), if passed
-            let sub_cmd = args.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-
-            // pure arguments without a command name, subcommand, or -g flag.
+            let raw_cmd = args[0].trim_start_matches('/').to_lowercase();
             let clean_args: Vec<&str> = args[1..].iter().copied().filter(|&a| a != "-g").collect();
 
-            // if there is a subcommand (for example, “set” in "/facts set"), the load arguments start from the 2nd element.
-            let payload = if !clean_args.is_empty() && clean_args[0].to_lowercase() == sub_cmd {
-                clean_args[1..].join(" ")
-            } else {
-                clean_args.join(" ")
-            };
-
-            let sid = session_id.lock().await.clone();
-
-            // helper for formatting long strings (safe for UTF-8 / Cyrillic)
-            let truncate = |s: &str, max_len: usize| -> String {
-                let char_count = s.chars().count();
-                if char_count > max_len {
-                    let truncated: String = s.chars().take(max_len).collect();
-                    format!("\"{truncated}...\"")
-                } else {
-                    format!("\"{s}\"")
+            // Нормализуем команду/подкоманду и отделяем payload подкоманды от самой подкоманды
+            let (cmd, sub_cmd, payload) = match raw_cmd.as_str() {
+                "remember" => ("facts".to_string(), "set".to_string(), clean_args.join(" ")),
+                "forget" => (
+                    "facts".to_string(),
+                    "remove".to_string(),
+                    clean_args.join(" "),
+                ),
+                _ => {
+                    let sub = clean_args
+                        .first()
+                        .map(|s| s.to_lowercase())
+                        .unwrap_or_default();
+                    let p = if clean_args.len() > 1 {
+                        clean_args[1..].join(" ")
+                    } else {
+                        String::new()
+                    };
+                    (raw_cmd, sub, p)
                 }
             };
 
-            // helper for displaying results in the UI
-            let render_msg = |msg: String| async move {
-                super::text_widget("")
-                    .handler(move |mut ctx| async move {
-                        *ctx.state = msg;
-                        ctx.finish();
-                    })
-                    .render()
-                    .await
-            };
+            // Payload для одиночных команд без подкоманд (например, /rename <name>)
+            let top_payload = clean_args.join(" ");
+
+            let sid = session_id.lock().await.clone();
 
             match cmd.as_str() {
                 "exit" | "quit" => return Err("exit".into()),
@@ -102,6 +147,8 @@ pub async fn render_input(
                         ("new", "Start a new clear session"),
                         ("clear", "Clear remote chat history"),
                         ("clone", "Clone the current session"),
+                        ("rename <name>", "Rename current session"),
+                        ("remove", "Remove/delete current session"),
                         ("compact [N]", "Compress context preserving N messages"),
                         ("facts list [count]", "List stored facts"),
                         ("facts add <fact>", "Save a new fact (alias: /remember)"),
@@ -144,430 +191,143 @@ pub async fn render_input(
                     continue;
                 }
 
-                // --- Memory: Facts ---
-                "facts" | "fact" => {
-                    match sub_cmd.as_str() {
-                        "list" | "ls" => {
-                            let count = clean_args
-                                .get(1)
-                                .and_then(|a| a.parse::<usize>().ok())
-                                .or(Some(20));
+                // memory facts
+                "facts" | "fact" => match sub_cmd.as_str() {
+                    "list" => {
+                        let count = payload.parse::<usize>().ok().or(Some(20));
+                        let endpoint = format!("{base_url}/users/{}/facts/list", sid.user_id);
 
-                            let endpoint = format!("{base_url}/users/{}/facts/list", sid.user_id);
-                            let res = client
-                                .post(&endpoint)
-                                .json(&ListQuery { count })
-                                .send()
-                                .await;
-
-                            let content = match res {
-                                Ok(r) => {
-                                    let status = r.status();
-                                    if status.is_success() {
-                                        match r.json::<Vec<UserFact>>().await {
-                                            Ok(facts) if facts.is_empty() => {
-                                                "No stored facts found.".to_string()
-                                            }
-                                            Ok(facts) => format!(
-                                                "Stored facts:\n{}",
-                                                facts
-                                                    .iter()
-                                                    .map(|f| format!("* [`{}`] {}", f.id, f.text))
-                                                    .collect::<Vec<_>>()
-                                                    .join("\n")
-                                            ),
-                                            Err(e) => format!("Failed to parse JSON response: {e}"),
-                                        }
-                                    } else {
-                                        let err_body = r.text().await.unwrap_or_default();
-                                        format!("List facts failed [{status}]: {err_body}")
+                        let content =
+                            match send_post(client, &endpoint, Some(&ListQuery { count })).await {
+                                Ok(res) => match res.json::<Vec<UserFact>>().await {
+                                    Ok(facts) if facts.is_empty() => {
+                                        "No stored facts found.".to_string()
                                     }
-                                }
-                                Err(e) => format!("Network error querying facts backend: {e}"),
+                                    Ok(facts) => format!(
+                                        "Stored facts:\n{}",
+                                        facts
+                                            .iter()
+                                            .map(|f| format!("* [`{}`] {}", f.id, f.text))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    ),
+                                    Err(e) => format!("Failed to parse JSON response: {e}"),
+                                },
+                                Err(err) => err,
                             };
 
-                            render_msg(content).await?;
-                            continue;
-                        }
-
-                        "set" | "add" | "remember" => {
-                            if payload.is_empty() {
-                                render_msg("Usage: /facts set <text>".into()).await?;
-                                continue;
-                            }
-                            let preview = truncate(&payload, 40);
-                            let endpoint = format!("{base_url}/users/{}/facts/set", sid.user_id);
-
-                            let msg = match client
-                                .post(&endpoint)
-                                .json(&SetQuery {
-                                    id: None,
-                                    text: payload,
-                                })
-                                .send()
-                                .await
-                            {
-                                Ok(res) => {
-                                    let status = res.status();
-                                    if status.is_success() {
-                                        match res.json::<UserFact>().await {
-                                            Ok(fact) => format!(
-                                                "Saved to global memory: [{}] {}",
-                                                fact.id,
-                                                truncate(&fact.text, 40)
-                                            ),
-                                            Err(_) => format!("Saved to global memory: {preview}"),
-                                        }
-                                    } else {
-                                        let err_body = res.text().await.unwrap_or_default();
-                                        if err_body.trim().is_empty() {
-                                            format!("Server returned status code: {status}")
-                                        } else {
-                                            format!("Error [{status}]: {err_body}")
-                                        }
-                                    }
-                                }
-                                Err(e) => format!("Network/Transport error: {e}"),
-                            };
-
-                            render_msg(msg).await?;
-                            continue;
-                        }
-
-                        "remove" | "rm" | "forget" | "del" => {
-                            let trimmed_payload = payload.trim();
-                            if trimmed_payload.is_empty() {
-                                render_msg("Usage: /facts remove <id>".into()).await?;
-                                continue;
-                            }
-
-                            let fact_id: u64 = match trimmed_payload.parse() {
-                                Ok(id) => id,
-                                Err(_) => {
-                                    render_msg(format!(
-                                        "Invalid ID `{trimmed_payload}`. Must be a numeric u64 ID."
-                                    ))
-                                    .await?;
-                                    continue;
-                                }
-                            };
-
-                            let endpoint = format!("{base_url}/users/{}/facts/remove", sid.user_id);
-
-                            let msg = match client
-                                .post(&endpoint)
-                                .json(&RemoveQuery { id: fact_id })
-                                .send()
-                                .await
-                            {
-                                Ok(res) => {
-                                    let status = res.status();
-                                    if status.is_success() {
-                                        format!("Removed fact `{fact_id}`")
-                                    } else {
-                                        let err_body = res.text().await.unwrap_or_default();
-                                        if err_body.trim().is_empty() {
-                                            format!("Server returned status code: {status}")
-                                        } else {
-                                            format!("Error [{status}]: {err_body}")
-                                        }
-                                    }
-                                }
-                                Err(e) => format!("Network/Transport error: {e}"),
-                            };
-
-                            render_msg(msg).await?;
-                            continue;
-                        }
-
-                        "search" | "find" => {
-                            if payload.is_empty() {
-                                render_msg("Usage: /facts search <query>".into()).await?;
-                                continue;
-                            }
-
-                            let endpoint = format!("{base_url}/users/{}/facts/search", sid.user_id);
-                            let res = client
-                                .post(&endpoint)
-                                .json(&SearchQuery {
-                                    query: payload,
-                                    limit: None,
-                                })
-                                .send()
-                                .await;
-
-                            let content = match res {
-                                Ok(r) => {
-                                    let status = r.status();
-                                    if status.is_success() {
-                                        match r.text().await {
-                                            Ok(body) => {
-                                                if let Ok(facts) =
-                                                    json::from_str::<Vec<UserFact>>(&body)
-                                                {
-                                                    if facts.is_empty() {
-                                                        "No matching facts found.".to_string()
-                                                    } else {
-                                                        format!(
-                                                            "Found facts:\n{}",
-                                                            facts
-                                                                .iter()
-                                                                .map(|f| format!(
-                                                                    "* [`{}`]: {}",
-                                                                    f.id, f.text
-                                                                ))
-                                                                .collect::<Vec<_>>()
-                                                                .join("\n")
-                                                        )
-                                                    }
-                                                } else if let Ok(facts) =
-                                                    json::from_str::<Vec<String>>(&body)
-                                                {
-                                                    if facts.is_empty() {
-                                                        "No matching facts found.".to_string()
-                                                    } else {
-                                                        format!(
-                                                            "Found facts:\n{}",
-                                                            facts
-                                                                .iter()
-                                                                .map(|f| format!("* [`{f}`]"))
-                                                                .collect::<Vec<_>>()
-                                                                .join("\n")
-                                                        )
-                                                    }
-                                                } else {
-                                                    format!("Failed to parse JSON response: {body}")
-                                                }
-                                            }
-                                            Err(e) => format!("Failed to read response body: {e}"),
-                                        }
-                                    } else {
-                                        let err_body = r.text().await.unwrap_or_default();
-                                        format!("Search failed [{status}]: {err_body}")
-                                    }
-                                }
-                                Err(e) => format!("Network error querying facts backend: {e}"),
-                            };
-
-                            render_msg(content).await?;
-                            continue;
-                        }
-
-                        "clear" | "purge" => {
-                            let endpoint = format!("{base_url}/users/{}/facts/clear", sid.user_id);
-
-                            let msg = match client.post(&endpoint).send().await {
-                                Ok(res) => {
-                                    let status = res.status();
-                                    if status.is_success() {
-                                        "All global facts cleared.".to_string()
-                                    } else {
-                                        let err_body = res.text().await.unwrap_or_default();
-                                        if err_body.trim().is_empty() {
-                                            format!("Server returned status code: {status}")
-                                        } else {
-                                            format!("Error [{status}]: {err_body}")
-                                        }
-                                    }
-                                }
-                                Err(e) => format!("Network/Transport error: {e}"),
-                            };
-
-                            render_msg(msg).await?;
-                            continue;
-                        }
-
-                        _ => {
-                            render_msg("Unknown facts subcommand. Available: list, add, remove, search, clear".into()).await?;
-                            continue;
-                        }
+                        render_msg(content).await?;
+                        continue;
                     }
-                }
 
-                // --- Memory: Rules ---
-                "rules" | "rule" => match sub_cmd.as_str() {
-                    "list" | "ls" => {
-                        let count = clean_args
-                            .get(1)
-                            .and_then(|a| a.parse::<usize>().ok())
-                            .or(Some(20));
-
-                        let endpoint = if is_global {
-                            format!("{base_url}/users/{}/rules/list", sid.user_id)
-                        } else {
-                            format!("{base_url}/sessions/{sid}/rules/list")
+                    "set" | "add" | "remember" => {
+                        if payload.is_empty() {
+                            render_msg("Usage: /facts set <text>").await?;
+                            continue;
+                        }
+                        let endpoint = format!("{base_url}/users/{}/facts/set", sid.user_id);
+                        let query = SetQuery {
+                            id: None,
+                            text: payload.clone(),
                         };
 
-                        let scope_str = if is_global { "global" } else { "session" };
+                        let msg = match send_post(client, &endpoint, Some(&query)).await {
+                            Ok(res) => match res.json::<UserFact>().await {
+                                Ok(fact) => format!(
+                                    "Saved to global memory: [{}] {}",
+                                    fact.id,
+                                    truncate(&fact.text, 40)
+                                ),
+                                Err(_) => {
+                                    format!("Saved to global memory: {}", truncate(&payload, 40))
+                                }
+                            },
+                            Err(err) => err,
+                        };
 
-                        let res = client
-                            .post(&endpoint)
-                            .json(&ListQuery { count })
-                            .send()
-                            .await;
+                        render_msg(msg).await?;
+                        continue;
+                    }
 
-                        let content = match res {
-                            Ok(r) => {
-                                let status = r.status();
-                                if status.is_success() {
-                                    match r.json::<Vec<UserRule>>().await {
-                                        Ok(rules) if rules.is_empty() => {
-                                            format!("No active {scope_str} rules found.")
-                                        }
-                                        Ok(rules) => format!(
-                                            "Active {scope_str} rules:\n{}",
-                                            rules
+                    "remove" | "delete" | "forgot" => {
+                        let fact_id: u64 = match payload.trim().parse() {
+                            Ok(id) => id,
+                            Err(_) => {
+                                render_msg("Usage: /facts remove <id> (numeric u64 ID required)")
+                                    .await?;
+                                continue;
+                            }
+                        };
+                        let endpoint = format!("{base_url}/users/{}/facts/remove", sid.user_id);
+
+                        let msg =
+                            match send_post(client, &endpoint, Some(&RemoveQuery { id: fact_id }))
+                                .await
+                            {
+                                Ok(_) => format!("Removed fact `{fact_id}`."),
+                                Err(err) => err,
+                            };
+
+                        render_msg(msg).await?;
+                        continue;
+                    }
+
+                    "search" | "find" => {
+                        if payload.is_empty() {
+                            render_msg("Usage: /facts search <query>").await?;
+                            continue;
+                        }
+                        let endpoint = format!("{base_url}/users/{}/facts/search", sid.user_id);
+                        let query = SearchQuery {
+                            query: payload,
+                            limit: None,
+                        };
+
+                        let content = match send_post(client, &endpoint, Some(&query)).await {
+                            Ok(res) => {
+                                let body = res.text().await.unwrap_or_default();
+                                if let Ok(facts) = json::from_str::<Vec<UserFact>>(&body) {
+                                    if facts.is_empty() {
+                                        "No matching facts found.".to_string()
+                                    } else {
+                                        format!(
+                                            "Found facts:\n{}",
+                                            facts
                                                 .iter()
-                                                .map(|rule| format!(
-                                                    "* [`{}`] {}",
-                                                    rule.id, rule.text
-                                                ))
+                                                .map(|f| format!("* [`{}`]: {}", f.id, f.text))
                                                 .collect::<Vec<_>>()
                                                 .join("\n")
-                                        ),
-                                        Err(e) => format!("Failed to parse JSON response: {e}"),
+                                        )
+                                    }
+                                } else if let Ok(facts) = json::from_str::<Vec<String>>(&body) {
+                                    if facts.is_empty() {
+                                        "No matching facts found.".to_string()
+                                    } else {
+                                        format!(
+                                            "Found facts:\n{}",
+                                            facts
+                                                .iter()
+                                                .map(|f| format!("* [`{f}`]"))
+                                                .collect::<Vec<_>>()
+                                                .join("\n")
+                                        )
                                     }
                                 } else {
-                                    let err_body = r.text().await.unwrap_or_default();
-                                    format!("List rules failed [{status}]: {err_body}")
+                                    format!("Failed to parse JSON response: {body}")
                                 }
                             }
-                            Err(e) => format!("Network error querying rules backend: {e}"),
+                            Err(err) => err,
                         };
 
                         render_msg(content).await?;
                         continue;
                     }
 
-                    "set" | "add" => {
-                        if payload.is_empty() {
-                            render_msg("Usage: /rules set [-g] <rule text>".into()).await?;
-                            continue;
-                        }
-
-                        let endpoint = if is_global {
-                            format!("{base_url}/users/{}/rules/set", sid.user_id)
-                        } else {
-                            format!("{base_url}/sessions/{sid}/rules/set")
-                        };
-
-                        let scope_str = if is_global { "global" } else { "session" };
-                        let preview = truncate(&payload, 40);
-
-                        let msg = match client
-                            .post(&endpoint)
-                            .json(&SetQuery {
-                                id: None,
-                                text: payload,
-                            })
-                            .send()
-                            .await
-                        {
-                            Ok(res) => {
-                                let status = res.status();
-                                if status.is_success() {
-                                    match res.json::<UserRule>().await {
-                                        Ok(rule) => format!(
-                                            "Applied {scope_str} rule: [{}] {}",
-                                            rule.id,
-                                            truncate(&rule.text, 40)
-                                        ),
-                                        Err(_) => {
-                                            format!("Applied {scope_str} rule: {preview}")
-                                        }
-                                    }
-                                } else {
-                                    let err_body = res.text().await.unwrap_or_default();
-                                    if err_body.trim().is_empty() {
-                                        format!("Server returned status code: {status}")
-                                    } else {
-                                        format!("Error [{status}]: {err_body}")
-                                    }
-                                }
-                            }
-                            Err(e) => format!("Network/Transport error: {e}"),
-                        };
-
-                        render_msg(msg).await?;
-                        continue;
-                    }
-
-                    "remove" | "rm" | "del" => {
-                        let trimmed_payload = payload.trim();
-                        if trimmed_payload.is_empty() {
-                            render_msg("Usage: /rules remove [-g] <id>".into()).await?;
-                            continue;
-                        }
-
-                        let rule_id: u64 = match trimmed_payload.parse() {
-                            Ok(id) => id,
-                            Err(_) => {
-                                render_msg(format!(
-                                    "Invalid ID '{trimmed_payload}'. Must be a numeric u64 ID."
-                                ))
-                                .await?;
-                                continue;
-                            }
-                        };
-
-                        let endpoint = if is_global {
-                            format!("{base_url}/users/{}/rules/remove", sid.user_id)
-                        } else {
-                            format!("{base_url}/sessions/{sid}/rules/remove")
-                        };
-
-                        let scope_str = if is_global { "global" } else { "session" };
-
-                        let msg = match client
-                            .post(&endpoint)
-                            .json(&RemoveQuery { id: rule_id })
-                            .send()
-                            .await
-                        {
-                            Ok(res) => {
-                                let status = res.status();
-                                if status.is_success() {
-                                    format!("Removed {scope_str} rule #{rule_id}")
-                                } else {
-                                    let err_body = res.text().await.unwrap_or_default();
-                                    if err_body.trim().is_empty() {
-                                        format!("Server returned status code: {status}")
-                                    } else {
-                                        format!("Error [{status}]: {err_body}")
-                                    }
-                                }
-                            }
-                            Err(e) => format!("Network/Transport error: {e}"),
-                        };
-
-                        render_msg(msg).await?;
-                        continue;
-                    }
-
-                    "clear" | "purge" => {
-                        let endpoint = if is_global {
-                            format!("{base_url}/users/{}/rules/clear", sid.user_id)
-                        } else {
-                            format!("{base_url}/sessions/{sid}/rules/clear")
-                        };
-
-                        let scope_str = if is_global { "global" } else { "session" };
-
-                        let msg = match client.post(&endpoint).send().await {
-                            Ok(res) => {
-                                let status = res.status();
-                                if status.is_success() {
-                                    format!("All {scope_str} rules cleared.")
-                                } else {
-                                    let err_body = res.text().await.unwrap_or_default();
-                                    if err_body.trim().is_empty() {
-                                        format!("Server returned status code: {status}")
-                                    } else {
-                                        format!("Error [{status}]: {err_body}")
-                                    }
-                                }
-                            }
-                            Err(e) => format!("Network/Transport error: {e}"),
+                    "clear" | "clean" => {
+                        let endpoint = format!("{base_url}/users/{}/facts/clear", sid.user_id);
+                        let msg = match send_post::<()>(client, &endpoint, None).await {
+                            Ok(_) => "All global facts cleared.".to_string(),
+                            Err(err) => err,
                         };
 
                         render_msg(msg).await?;
@@ -576,120 +336,220 @@ pub async fn render_input(
 
                     _ => {
                         render_msg(
-                            "Unknown rules subcommand. Available: list, set, remove, clear".into(),
+                            "Unknown facts subcommand. Available: list, add, remove, search, clear",
                         )
                         .await?;
                         continue;
                     }
                 },
 
+                // memory rules
+                "rules" | "rule" => {
+                    let endpoint_prefix = if is_global {
+                        format!("{base_url}/users/{}", sid.user_id)
+                    } else {
+                        format!("{base_url}/sessions/{sid}")
+                    };
+                    let scope_str = if is_global { "global" } else { "session" };
+
+                    match sub_cmd.as_str() {
+                        "list" => {
+                            let count = clean_args
+                                .get(1)
+                                .and_then(|a| a.parse::<usize>().ok())
+                                .or(Some(20));
+                            let endpoint = format!("{endpoint_prefix}/rules/list");
+
+                            let content = match send_post(
+                                client,
+                                &endpoint,
+                                Some(&ListQuery { count }),
+                            )
+                            .await
+                            {
+                                Ok(res) => match res.json::<Vec<UserRule>>().await {
+                                    Ok(rules) if rules.is_empty() => {
+                                        format!("No active {scope_str} rules found.")
+                                    }
+                                    Ok(rules) => format!(
+                                        "Active {scope_str} rules:\n{}",
+                                        rules
+                                            .iter()
+                                            .map(|r| format!("* [`{}`] {}", r.id, r.text))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    ),
+                                    Err(e) => format!("Failed to parse JSON response: {e}"),
+                                },
+                                Err(err) => err,
+                            };
+
+                            render_msg(content).await?;
+                            continue;
+                        }
+
+                        "set" | "add" => {
+                            if payload.is_empty() {
+                                render_msg("Usage: /rules set [-g] <rule text>").await?;
+                                continue;
+                            }
+                            let endpoint = format!("{endpoint_prefix}/rules/set");
+                            let query = SetQuery {
+                                id: None,
+                                text: payload.clone(),
+                            };
+
+                            let msg = match send_post(client, &endpoint, Some(&query)).await {
+                                Ok(res) => match res.json::<UserRule>().await {
+                                    Ok(rule) => format!(
+                                        "Applied {scope_str} rule [`{}`]: {}",
+                                        rule.id,
+                                        truncate(&rule.text, 40)
+                                    ),
+                                    Err(_) => format!(
+                                        "Applied {scope_str} rule: {}",
+                                        truncate(&payload, 40)
+                                    ),
+                                },
+                                Err(err) => err,
+                            };
+
+                            render_msg(msg).await?;
+                            continue;
+                        }
+
+                        "remove" | "delete" => {
+                            let rule_id: u64 = match payload.trim().parse() {
+                                Ok(id) => id,
+                                Err(_) => {
+                                    render_msg("Usage: /rules remove [-g] <id>").await?;
+                                    continue;
+                                }
+                            };
+                            let endpoint = format!("{endpoint_prefix}/rules/remove");
+
+                            let msg = match send_post(
+                                client,
+                                &endpoint,
+                                Some(&RemoveQuery { id: rule_id }),
+                            )
+                            .await
+                            {
+                                Ok(_) => format!("Removed {scope_str} rule `{rule_id}`."),
+                                Err(err) => err,
+                            };
+
+                            render_msg(msg).await?;
+                            continue;
+                        }
+
+                        "clear" | "clean" => {
+                            let endpoint = format!("{endpoint_prefix}/rules/clear");
+                            let msg = match send_post::<()>(client, &endpoint, None).await {
+                                Ok(_) => format!("All {scope_str} rules cleared."),
+                                Err(err) => err,
+                            };
+
+                            render_msg(msg).await?;
+                            continue;
+                        }
+
+                        _ => {
+                            render_msg(
+                                "Unknown rules subcommand. Available: list, set, remove, clear",
+                            )
+                            .await?;
+                            continue;
+                        }
+                    }
+                }
+
                 "new" => {
                     let new_sid = SessionId::new(sid.user_id);
                     *session_id.lock().await = new_sid.clone();
 
-                    let msg = match client
-                        .post(&format!("{base_url}/sessions/{new_sid}/init"))
-                        .json(&super::session_info(new_sid))
-                        .send()
-                        .await
+                    let endpoint = format!("{base_url}/sessions/{new_sid}/init");
+                    let msg = match send_post(
+                        client,
+                        &endpoint,
+                        Some(&super::session_info(new_sid.clone())),
+                    )
+                    .await
                     {
-                        Ok(res) => {
-                            let status = res.status();
-                            if status.is_success() {
-                                format!("Started new session: {new_sid}")
-                            } else {
-                                let err_body = res.text().await.unwrap_or_default();
-                                if err_body.trim().is_empty() {
-                                    format!("Server returned status code: {status}")
-                                } else {
-                                    format!("Error [{status}]: {err_body}")
-                                }
-                            }
-                        }
-                        Err(e) => format!("Network/Transport error: {e}"),
+                        Ok(_) => format!("Started new session: `{new_sid}`."),
+                        Err(err) => err,
                     };
 
                     render_msg(msg).await?;
                     continue;
                 }
 
-                "clone" | "fork" => {
-                    // obtain the ID of the current (original) session.
+                "clone" | "duplicate" => {
                     let old_sid = session_id.lock().await.clone();
+                    let endpoint = format!("{base_url}/sessions/{old_sid}/clone");
 
-                    #[derive(serde::Deserialize)]
-                    struct CloneResponse {
-                        id: SessionId,
-                    }
+                    let msg = match send_post::<()>(client, &endpoint, None).await {
+                        Ok(res) => match res.json::<CloneResponse>().await {
+                            Ok(payload) => {
+                                let new_sid = payload.id;
+                                *session_id.lock().await = new_sid.clone();
 
-                    // send a POST request for cloning.
-                    let msg = match client
-                        .post(&format!("{base_url}/sessions/{old_sid}/clone"))
-                        .send()
-                        .await
-                    {
-                        Ok(res) => {
-                            let status = res.status();
-                            if status.is_success() {
-                                // read the JSON with the new ID from the server response.
-                                match res.json::<CloneResponse>().await {
-                                    Ok(payload) => {
-                                        let new_sid = payload.id;
+                                let _ = send_post::<()>(
+                                    client,
+                                    &format!("{base_url}/sessions/{old_sid}/finish"),
+                                    None,
+                                )
+                                .await;
 
-                                        // updating the local session ID
-                                        *session_id.lock().await = new_sid.clone();
-
-                                        // sending a signal to close the previous session
-                                        client
-                                            .post(&format!("{base_url}/sessions/{old_sid}/finish"))
-                                            .send()
-                                            .await?;
-
-                                        format!(
-                                            "Cloned current context into new session: {new_sid}"
-                                        )
-                                    }
-                                    Err(e) => {
-                                        format!("Failed to parse clone response JSON: {e}")
-                                    }
-                                }
-                            } else {
-                                let err_body = res.text().await.unwrap_or_default();
-                                if err_body.trim().is_empty() {
-                                    format!(
-                                        "Failed to clone session. Server returned status: {status}"
-                                    )
-                                } else {
-                                    format!("Error cloning session [{status}]: {err_body}")
-                                }
+                                format!("Cloned current context into new session: `{new_sid}`.")
                             }
-                        }
-                        Err(e) => format!("Network/Transport error during clone: {e}"),
+                            Err(e) => format!("Failed to parse clone response JSON: {e}"),
+                        },
+                        Err(err) => err,
                     };
 
                     render_msg(msg).await?;
                     continue;
+                }
+
+                "rename" => {
+                    if top_payload.is_empty() {
+                        render_msg("Usage: /rename <new_name>").await?;
+                        continue;
+                    }
+
+                    let endpoint = format!("{base_url}/sessions/{sid}/rename");
+                    let query = RenameQuery {
+                        name: top_payload.clone(),
+                    };
+
+                    let msg = match send_post(client, &endpoint, Some(&query)).await {
+                        Ok(_) => format!("Session renamed to `{payload}`."),
+                        Err(err) => err,
+                    };
+
+                    render_msg(msg).await?;
+                    continue;
+                }
+
+                "remove" | "delete" => {
+                    let endpoint = format!("{base_url}/sessions/{sid}/remove");
+
+                    let msg = match send_post::<()>(client, &endpoint, None).await {
+                        Ok(_) => format!("Session `{sid}` removed successfully."),
+                        Err(err) => err,
+                    };
+
+                    render_msg(msg).await?;
+                    return Err("exit".into());
                 }
 
                 "clear" | "clean" => {
-                    let sid = session_id.lock().await.clone();
                     let endpoint = format!("{base_url}/sessions/{sid}/clear");
 
-                    let msg = match client.post(&endpoint).send().await {
-                        Ok(res) => {
-                            let status = res.status();
-                            if status.is_success() {
-                                "History cleared successfully.".to_string()
-                            } else {
-                                let err_body = res.text().await.unwrap_or_default();
-                                if err_body.trim().is_empty() {
-                                    format!("Server returned status code: {status}")
-                                } else {
-                                    format!("Error [{status}]: {err_body}")
-                                }
-                            }
-                        }
-                        Err(e) => format!("Network/Transport error: {e}"),
+                    let msg = match send_post::<()>(client, &endpoint, None).await {
+                        Ok(_) => "History cleared successfully.".to_string(),
+                        Err(err) => err,
                     };
 
                     render_msg(msg).await?;
@@ -697,9 +557,8 @@ pub async fn render_input(
                 }
 
                 "compact" | "compress" => {
-                    let sid = session_id.lock().await.clone();
-                    let preserve = args
-                        .get(1)
+                    let preserve = clean_args
+                        .first()
                         .and_then(|i| i.parse::<usize>().ok())
                         .unwrap_or_else(|| Config::get().execution.preserve_messages);
 

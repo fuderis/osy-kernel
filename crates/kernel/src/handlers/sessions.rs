@@ -4,9 +4,29 @@ use anylm::{
     api::{Message, Messages},
     completions::{Chunk, Completions},
 };
-use osy_share::{CompactQuery, Event, RemoveQuery, SessionId, SessionInfo, SetQuery};
+use osy_share::{CompactQuery, Event, RemoveQuery, RenameQuery, SessionId, SessionInfo, SetQuery};
 
-/// API: Initializes the user session and returns its messages
+/// API: Returns session metadata by ID.
+#[log(sid = %sid)]
+pub async fn handle_session_metadata(Paths(sid): Paths<SessionId>) -> Response {
+    info!("Fetching metadata for session `{sid}`...");
+
+    let Some(session_shared) = Session::get(&sid).await else {
+        let err_msg = format!("Undefined session id `{sid}`");
+        error!("{err_msg}");
+        return Response::error().text(err_msg);
+    };
+
+    info!("Waiting for session lock...");
+    let metadata = {
+        let session = session_shared.lock().await;
+        session.metadata.clone()
+    };
+
+    Response::ok().json(&metadata)
+}
+
+/// API: Initializes user session and returns its messages
 #[log(sid = %sid)]
 pub async fn handle_session_init(
     Paths(sid): Paths<SessionId>,
@@ -47,7 +67,7 @@ pub async fn handle_session_init(
     }
 }
 
-/// API: Finishes the user session and flushes DB to prevent lock contention
+/// API: Finishes user session and flushes DB to prevent lock contention
 #[log(sid = %sid)]
 pub async fn handle_session_finish(Paths(sid): Paths<SessionId>) -> Response {
     match Session::finish(&sid).await {
@@ -59,7 +79,43 @@ pub async fn handle_session_finish(Paths(sid): Paths<SessionId>) -> Response {
     }
 }
 
-/// API: Handles the session compression
+/// API: Renames active user session.
+#[log(sid = %sid)]
+pub async fn handle_session_rename(
+    Paths(sid): Paths<SessionId>,
+    payload: Json<RenameQuery>,
+) -> Response {
+    let RenameQuery { name } = payload.0;
+    info!("Renaming session `{sid}` to `{name}`...");
+
+    let Some(session_shared) = Session::get(&sid).await else {
+        let err_msg = format!("Undefined session id `{sid}`");
+        error!("{err_msg}");
+        return Response::error().text(err_msg);
+    };
+
+    info!("Waiting for session lock...");
+    let rename_res = {
+        let mut session = session_shared.lock().await;
+        info!("Acquired session lock. Renaming session...");
+        let res = session.rename(name).await;
+        info!("Rename operation completed. Releasing session lock...");
+        res
+    };
+
+    match rename_res {
+        Ok(_) => {
+            info!("Session `{sid}` renamed successfully.");
+            Response::ok().text("Session renamed successfully")
+        }
+        Err(e) => {
+            error!("Failed to rename session `{sid}`: {e}");
+            Response::error().text(e.to_string())
+        }
+    }
+}
+
+/// API: Handles session compression.
 #[log(sid = %sid)]
 pub async fn handle_session_compact(
     Paths(sid): Paths<SessionId>,
@@ -167,7 +223,7 @@ pub async fn handle_session_compact(
 
             info!("Waiting for session lock to save compressed history...");
             let save_res = {
-                let session = session_shared.lock().await;
+                let mut session = session_shared.lock().await;
                 info!("Acquired session lock. Inserting & shifting DB...");
                 let res = session
                     .insert_and_shift(compressed_message, to_preserve, compress_count)
@@ -195,7 +251,7 @@ pub async fn handle_session_clear(Paths(sid): Paths<SessionId>) -> Response {
     if let Some(session_shared) = Session::get(&sid).await {
         info!("Waiting for session lock...");
         let res = {
-            let session = session_shared.lock().await;
+            let mut session = session_shared.lock().await;
             let clear_res = session.clear().await;
             clear_res
         };
@@ -211,7 +267,24 @@ pub async fn handle_session_clear(Paths(sid): Paths<SessionId>) -> Response {
     Response::ok()
 }
 
-/// Clones the user session and returns a new ID
+/// API: Completely removes user session from memory and disk.
+#[log(sid = %sid)]
+pub async fn handle_session_remove(Paths(sid): Paths<SessionId>) -> Response {
+    info!("Initiating full removal for session `{sid}`...");
+
+    match Session::remove(&sid).await {
+        Ok(_) => {
+            info!("Session `{sid}` removed successfully.");
+            Response::ok().text("Session removed successfully")
+        }
+        Err(e) => {
+            error!("Failed to remove session `{sid}`: {e}");
+            Response::error().text(e.to_string())
+        }
+    }
+}
+
+/// Clones user session and returns a new ID.
 #[log(sid = %sid)]
 pub async fn handle_session_clone(Paths(sid): Paths<SessionId>) -> Response {
     if let Some(session_shared) = Session::get(&sid).await {
@@ -240,7 +313,7 @@ pub async fn handle_session_clone(Paths(sid): Paths<SessionId>) -> Response {
 
 // --- LOCAL SESSION RULES HANDLERS ---
 
-/// API: Lists active rules (global + local) for a session
+/// API: Lists active rules (global + local) for a session.
 #[log(sid = %sid)]
 pub async fn handle_session_rules_list(Paths(sid): Paths<SessionId>) -> Response {
     info!("Looking up Session::get...");
@@ -271,7 +344,7 @@ pub async fn handle_session_rules_list(Paths(sid): Paths<SessionId>) -> Response
     }
 }
 
-/// API: Adds or updates a rule in the session or global context
+/// API: Adds or updates rule in the session or global context.
 #[log(sid = %sid)]
 pub async fn handle_session_rules_set(
     Paths(sid): Paths<SessionId>,
@@ -317,7 +390,7 @@ pub async fn handle_session_rules_set(
     }
 }
 
-/// API: Removes a rule from the active session context by ID
+/// API: Removes rule from the active session context by ID.
 #[log(sid = %sid)]
 pub async fn handle_session_rules_remove(
     Paths(sid): Paths<SessionId>,
@@ -359,7 +432,7 @@ pub async fn handle_session_rules_remove(
     }
 }
 
-/// API: Clears only the local rules for a session
+/// API: Clears only local rules for a session.
 #[log(sid = %sid)]
 pub async fn handle_session_rules_clear(Paths(sid): Paths<SessionId>) -> Response {
     info!("Requesting clear_local_rules...");

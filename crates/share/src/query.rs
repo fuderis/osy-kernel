@@ -31,6 +31,11 @@ pub struct RemoveQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameQuery {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     pub query: String,
     #[serde(default)]

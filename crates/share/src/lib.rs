@@ -21,8 +21,8 @@ pub use agent_metadata::*;
 pub mod session_id;
 pub use session_id::*;
 
-pub mod session_info;
-pub use session_info::*;
+pub mod meta;
+pub use meta::{SessionInfo, SessionMetadata, UserMetadata};
 
 pub mod skill;
 pub use skill::*;
