@@ -22,7 +22,7 @@ where
     let timestamp = Local::now().format("%a %I:%M %p").to_string();
 
     super::text_widget("")
-        .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
+        .title(format!(" {timestamp} ").with(brand_color), Align::TopLeft)
         .spinner_style(SpinnerStyle::MiniDots)
         .spinner_color(brand_color)
         .prefix_line(LineStyle::Solid)
@@ -56,13 +56,13 @@ where
                             Event::Thinking(status) => {
                                 status_msg = Some(format!("{}", status.italic().dim()));
                                 update_ui(&mut ctx.state, &full_response, status_msg.as_deref());
-                                ctx.sync_n(3);
+                                ctx.sync();
                                 ctx.notify();
                             }
                             Event::Answer(chunk) => {
                                 full_response.push_str(&chunk);
                                 update_ui(&mut ctx.state, &full_response, status_msg.as_deref());
-                                ctx.sync_n(3);
+                                ctx.sync();
                                 ctx.notify();
                             }
                             Event::Error(err) => {
@@ -79,7 +79,7 @@ where
 
                                 status_msg = Some(formatted_err);
                                 update_ui(&mut ctx.state, &full_response, status_msg.as_deref());
-                                ctx.sync_n(3);
+                                ctx.sync();
                                 ctx.notify();
                             }
 
@@ -95,7 +95,7 @@ where
                                         &full_response,
                                         status_msg.as_deref(),
                                     );
-                                    ctx.sync_n(3);
+                                    ctx.sync();
                                     ctx.notify();
 
                                     let output = atoman::process::Command::new("bash")
@@ -134,7 +134,7 @@ where
                                         &full_response,
                                         status_msg.as_deref(),
                                     );
-                                    ctx.sync_n(3);
+                                    ctx.sync();
                                     ctx.notify();
                                 }
 

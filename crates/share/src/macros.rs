@@ -5,7 +5,7 @@ macro_rules! macos_proc_protect {
         {
             ::atoman::spawn(async {
                 use ::atoman::io::AsyncReadExt;
-                let mut std_in = atoman::io::stdin();
+                let mut std_in = ::atoman::io::stdin();
                 let mut buf = [0; 1];
                 if let Ok(0) = std_in.read(&mut buf).await {
                     ::std::process::exit(0);

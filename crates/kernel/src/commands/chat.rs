@@ -41,6 +41,7 @@ pub async fn handle_chat(
         loop {
             let cfg = Config::get();
             let alt_color = cfg.theme.alt_color();
+            let brand_color = cfg.theme.brand_color();
 
             let trimmed = match utils::render_input(&client, base_url.clone(), &session_id).await {
                 Ok(input) => input,
@@ -56,7 +57,7 @@ pub async fn handle_chat(
 
             // render user message
             utils::text_widget("")
-                .title(format!(" {timestamp} ").with(alt_color), Align::TopLeft)
+                .title(format!(" {timestamp} ").with(brand_color), Align::TopLeft)
                 .border_color(alt_color)
                 .margin_bottom(0)
                 .handler(move |mut ctx| async move {

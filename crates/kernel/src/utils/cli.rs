@@ -161,7 +161,7 @@ pub async fn init_session(
                     let msg_text = msg.extract_texts().concat();
                     let timestamp = if let Some(dt) = msg.timestamp {
                         format!(" {} ", dt.format("%a %I:%M %p").to_string())
-                            .with(alt_color)
+                            .with(brand_color)
                             .to_string()
                     } else {
                         str!(" -:- ")
