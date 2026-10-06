@@ -22,11 +22,11 @@ resolver = "3"
 osy-share.path = "crates/share"
 osy-skill.path = "crates/skill"
 
-atoman = { version = "0.11.8", features = ["full"] }
+atoman = { version = "0.12.1", features = ["full"] }
 macron = { version = "0.5.2", features = ["full"] }
 rigging = { version = "0.5.10", features = ["full"] }
-pearce = { version = "0.6.1", features = ["full"] }
-anylm = { version = "0.4.1", features = ["full"] }
+pearce = { version = "0.6.2", features = ["full"] }
+anylm = { version = "0.4.2", features = ["full"] }
 cistern = { version = "0.4.0", features = ["full"] }
 
 # atoman = { path = "../atoman", features = ["full"] }
