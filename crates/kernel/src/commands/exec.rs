@@ -1,7 +1,7 @@
 use crate::{prelude::*, utils};
 
 use anylm::api::Message;
-use osy_share::{HandleQuery, SessionId};
+use osy_share::{HandleQuery, SessionId, ToolQuery};
 
 /// API: Handling specific skill tool.
 pub async fn handle_tool_call(skill_name: &str, tool_name: &str, payload: String) -> Result<()> {
@@ -24,7 +24,19 @@ pub async fn handle_tool_call(skill_name: &str, tool_name: &str, payload: String
 
     // rendering response
     let url = format!("{base_url}/skills/{skill_name}/call/{tool_name}");
-    utils::render_response(url, json_payload).await
+    utils::render_response(
+        url,
+        ToolQuery {
+            current_path: std::env::current_dir()
+                .map_err(|e| {
+                    warn!("Failed to get current_dir: {e}");
+                    e
+                })
+                .ok(),
+            payload: json_payload,
+        },
+    )
+    .await
 }
 
 /// API: Handling skill with a text request.
@@ -36,10 +48,6 @@ pub async fn handle_skill_query(
     skill_name: String,
     query: String,
 ) -> Result<()> {
-    let query_payload = HandleQuery {
-        message: Message::user(vec![query.into()]),
-    };
-
     let port = Config::get().server.port;
     let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::tcp();
@@ -65,5 +73,17 @@ pub async fn handle_skill_query(
 
     // rendering response
     let url = format!("{base_url}/sessions/{sid}/skills/{skill_name}/query");
-    utils::render_response(url, query_payload).await
+    utils::render_response(
+        url,
+        HandleQuery {
+            current_path: std::env::current_dir()
+                .map_err(|e| {
+                    warn!("Failed to get current_dir: {e}");
+                    e
+                })
+                .ok(),
+            message: Message::user(vec![query.into()]),
+        },
+    )
+    .await
 }

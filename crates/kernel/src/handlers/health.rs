@@ -34,5 +34,6 @@ pub async fn handle_refresh() -> Response {
 /// API: Returns configured AI provider options.
 #[log()]
 pub async fn handle_options() -> Response {
-    Response::ok().json(&Config::get().completions)
+    let llm_ops = &Config::get().llm;
+    Response::ok().json(&(&llm_ops.completions, &llm_ops.embeddings))
 }

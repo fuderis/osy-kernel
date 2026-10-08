@@ -214,9 +214,9 @@ impl Default for RuntimeOptions {
     }
 }
 
-/// LLM prompts list.
+/// LLM completions/embeddings options.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PromptsOptions {
+pub struct LLMOptions {
     /// Base system prompt template.
     pub system_prompt: String,
     /// Primary assistant role and behavior prompt.
@@ -231,9 +231,25 @@ pub struct PromptsOptions {
     pub normalize_prompt: String,
     /// Prompt used for summarizing and compressing context.
     pub compress_prompt: String,
+
+    /// Assistant temperature.
+    pub assist_temperature: f32,
+    /// Agent skill temperature.
+    pub skill_temperature: f32,
+    /// Language translation temperature.
+    pub translate_temperature: f32,
+    /// Context normalization temperature.
+    pub normalize_temperature: f32,
+    /// Chat compession temperature.
+    pub compress_temperature: f32,
+
+    /// Completions provider options.
+    pub completions: Options,
+    /// Embeddings provider options.
+    pub embeddings: Options,
 }
 
-impl Default for PromptsOptions {
+impl Default for LLMOptions {
     fn default() -> Self {
         Self {
             system_prompt: SYSTEM_PROMPT.trim().into(),
@@ -243,51 +259,83 @@ impl Default for PromptsOptions {
             normalize_prompt: NORMALIZE_PROMPT.trim().into(),
             control_prompt: CONTROL_PROMPT.trim().into(),
             compress_prompt: COMPRESSION_PROMPT.trim().into(),
-        }
-    }
-}
 
-/// LLM completions options.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompletionsOptions {
-    /// Agent LLM temperature.
-    pub skill_temp: f32,
-    /// Compession LLM temperature.
-    pub compress_temp: f32,
-    /// LLM provider options.
-    pub options: Options,
-}
+            assist_temperature: 0.6,
+            skill_temperature: 0.2,
+            translate_temperature: 0.4,
+            normalize_temperature: 0.4,
+            compress_temperature: 0.4,
 
-impl Default for CompletionsOptions {
-    fn default() -> Self {
-        Self {
-            skill_temp: 0.2,
-            compress_temp: 0.4,
-            options: Options::openai()
+            completions: Options::openai()
                 .env_var("ROUTERAI_API_KEY")
                 .base_url("https://routerai.ru/api")
                 .model("qwen/qwen3-coder-next")
-                .max_tokens(16384)
-                .temperature(0.6),
-        }
-    }
-}
-
-/// Text embeddings pipeline options.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EmbeddingsOptions {
-    /// LLM provider options.
-    pub options: Options,
-}
-
-impl Default for EmbeddingsOptions {
-    fn default() -> Self {
-        Self {
-            options: Options::openai()
+                .max_tokens(16384),
+            embeddings: Options::openai()
                 .env_var("ROUTERAI_API_KEY")
                 .base_url("https://routerai.ru/api")
                 .model("perplexity/pplx-embed-v1-0.6b"),
         }
+    }
+}
+
+impl LLMOptions {
+    pub fn system_prompt(&self) -> &str {
+        self.system_prompt.trim()
+    }
+    pub fn assist_prompt(&self) -> &str {
+        self.assist_prompt.trim()
+    }
+    pub fn skill_prompt(&self) -> &str {
+        self.skill_prompt.trim()
+    }
+    pub fn control_prompt(&self) -> &str {
+        self.control_prompt.trim()
+    }
+    pub fn translate_prompt(&self) -> &str {
+        self.translate_prompt.trim()
+    }
+    pub fn normalize_prompt(&self) -> &str {
+        self.normalize_prompt.trim()
+    }
+    pub fn compress_prompt(&self) -> &str {
+        self.compress_prompt.trim()
+    }
+
+    pub fn assist_options(&self) -> Options {
+        self.completions
+            .clone()
+            .temperature(self.assist_temperature)
+    }
+
+    pub fn skill_options(&self) -> Options {
+        self.completions.clone().temperature(self.skill_temperature)
+    }
+
+    pub fn translate_options(&self) -> Options {
+        self.completions
+            .clone()
+            .temperature(self.translate_temperature)
+    }
+
+    pub fn normalize_options(&self) -> Options {
+        self.completions
+            .clone()
+            .temperature(self.normalize_temperature)
+    }
+
+    pub fn compress_options(&self) -> Options {
+        self.completions
+            .clone()
+            .temperature(self.compress_temperature)
+    }
+
+    pub fn completions_options(&self) -> Options {
+        self.completions.clone()
+    }
+
+    pub fn embeddings_options(&self) -> Options {
+        self.embeddings.clone()
     }
 }
 
@@ -312,24 +360,6 @@ impl Default for ContextOptions {
     }
 }
 
-/// Query cache options.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CacheOptions {
-    /// Flag indicating whether response caching is enabled.
-    pub enable: bool,
-    /// Similarity coefficient threshold required for a cache hit.
-    pub coefficient: f32,
-}
-
-impl Default for CacheOptions {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            coefficient: 0.8,
-        }
-    }
-}
-
 /// Kernel config.
 #[atoman::config]
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -342,14 +372,8 @@ pub struct Config {
     pub execution: ExecutionOptions,
     /// JavaScript runtime options.
     pub runtime: RuntimeOptions,
-    /// LLM prompts options.
-    pub prompts: PromptsOptions,
-    /// Main completions pipeline options.
-    pub completions: CompletionsOptions,
-    /// Text embeddings pipeline options.
-    pub embeddings: EmbeddingsOptions,
+    /// LLM prompts & provider options.
+    pub llm: LLMOptions,
     /// RAG memory and context settings.
     pub context: ContextOptions,
-    /// Response caching settings.
-    pub cache: CacheOptions,
 }

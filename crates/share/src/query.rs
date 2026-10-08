@@ -1,5 +1,6 @@
 use anylm::api::Message;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListQuery {
@@ -9,7 +10,27 @@ pub struct ListQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandleQuery {
+    pub current_path: Option<PathBuf>,
     pub message: Message,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolQuery<T> {
+    pub current_path: Option<PathBuf>,
+    #[serde(flatten)]
+    pub payload: T,
+}
+
+impl ToolQuery<serde_json::Value> {
+    pub fn parse_payload<T: serde::de::DeserializeOwned>(
+        self,
+    ) -> Result<ToolQuery<T>, serde_json::Error> {
+        let typed_payload = serde_json::from_value(self.payload)?;
+        Ok(ToolQuery {
+            current_path: self.current_path,
+            payload: typed_payload,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

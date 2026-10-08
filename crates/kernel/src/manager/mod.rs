@@ -175,11 +175,7 @@ impl Manager {
 
         for (_, agent) in MANAGER.get().agents.to_hash().await {
             let guard = agent.read().await;
-            agents.push(AgentMeta {
-                name: guard.metadata.name.clone(),
-                description: guard.metadata.description.clone(),
-                ..Default::default()
-            });
+            agents.push(guard.metadata.clone());
         }
 
         agents

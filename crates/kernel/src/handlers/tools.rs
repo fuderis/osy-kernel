@@ -1,15 +1,19 @@
 use crate::{Manager, prelude::*};
 
 use anylm::api::{ToolCall, ToolCallFunction};
-use osy_share::Event;
+use osy_share::{Event, ToolQuery};
 use pearce::Callback;
 
 /// API: Handles skill tool call.
 pub async fn handle_tool_call(
     skill_and_tool: Paths<(String, String)>,
-    payload: Json<JsonValue>,
+    query: Json<ToolQuery<JsonValue>>,
 ) -> Response {
     let (skill_name, tool_name) = skill_and_tool.0;
+    let ToolQuery {
+        current_path,
+        payload,
+    } = query.0;
 
     Response::ok().stream(async move |tx| {
         let Some(agent) = Manager::get_by_skill(&skill_name).await else {
@@ -29,7 +33,7 @@ pub async fn handle_tool_call(
             kind: "".into(),
             func: ToolCallFunction {
                 name: tool_name,
-                json_str: payload.0.to_string(),
+                json_str: payload.to_string(),
             },
         };
 
@@ -41,6 +45,7 @@ pub async fn handle_tool_call(
             agent_name,
             skill_name,
             tool_call,
+            current_path,
             tx.clone(),
         )
         .await
@@ -65,6 +70,7 @@ pub async fn handle_tool(
     agent_name: String,
     skill_name: String,
     tool_call: ToolCall,
+    current_path: Option<PathBuf>,
     tx: Sender<Bytes>,
 ) -> Result<(String, String)> {
     let func = tool_call.func;
@@ -79,10 +85,12 @@ pub async fn handle_tool(
     tx.send(Event::Thinking(msg)).ok();
 
     let request_path = format!("/skills/{skill_name}/call/{}", func.name);
-    let request_body = func.parse_args::<JsonValue>()?;
+    let request_body = ToolQuery {
+        current_path,
+        payload: func.parse_args::<JsonValue>()?,
+    };
     let mut response = client
         .post(&request_path)
-        .header("Content-Type", "application/json")
         .json(&request_body)
         .stream::<Event>()
         .await;
@@ -98,7 +106,6 @@ pub async fn handle_tool(
             if agent.read().await.ensure().await.is_ok() {
                 response = Client::ipc(&sock_path)
                     .post(&request_path)
-                    .header("Content-Type", "application/json")
                     .json(&request_body)
                     .stream::<Event>()
                     .await;
@@ -144,7 +151,6 @@ pub async fn handle_tool(
                     let client = Client::ipc(&sock_path);
                     let _ = client
                         .post(&format!("/callback/{d_event_id}"))
-                        .header("Content-Type", "application/json")
                         .json(&value)
                         .send()
                         .await

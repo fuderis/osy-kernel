@@ -8,9 +8,7 @@ use anylm::{
 
 /// Generates the text embeddings.
 pub async fn generate_embedding(text: &str, search: Search) -> Result<Vec<f32>> {
-    let ai_ops = Config::get().embeddings.options.clone();
-
-    let embeddings = Embeddings::try_from(ai_ops)?
+    let embeddings = Embeddings::try_from(Config::get().llm.embeddings_options())?
         .input(text)
         .search(search)
         .send()
@@ -28,11 +26,9 @@ pub async fn generate_embedding(text: &str, search: Search) -> Result<Vec<f32>> 
 /// Normalizes user fact text.
 pub async fn normalize_fact_text(raw_text: &str) -> String {
     let cfg = &Config::get();
-    let normalize_prompt = &cfg.prompts.normalize_prompt;
-    let provider_options = &cfg.completions.options;
 
     let messages = Messages::new()
-        .system(vec![normalize_prompt.as_str().into()])
+        .system(vec![cfg.llm.normalize_prompt().into()])
         .user(vec![raw_text.into()])
         .wrap();
 
@@ -44,7 +40,7 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
     }
 
     let res = async {
-        let mut response = Completions::try_from(provider_options.clone())?
+        let mut response = Completions::try_from(cfg.llm.normalize_options())?
             .schema(NormalizedFact::schema())
             .send(messages)
             .await?;
@@ -73,14 +69,12 @@ pub async fn normalize_fact_text(raw_text: &str) -> String {
 /// Translates text to English.
 pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String> {
     let cfg = Config::get();
-    let translate_prompt = &cfg.prompts.translate_prompt;
-    let provider_options = &cfg.completions.options;
 
     let messages = Messages::new()
         .system(vec![
             format!(
                 "{}{}",
-                translate_prompt.trim(),
+                cfg.llm.translate_prompt(),
                 if vec_search {
                     "Optimize for semantic vector search."
                 } else {
@@ -99,7 +93,7 @@ pub async fn translate_to_english(text: &str, vec_search: bool) -> Result<String
         translated_text: String,
     }
 
-    let mut response = Completions::try_from(provider_options.clone())?
+    let mut response = Completions::try_from(cfg.llm.translate_options())?
         .schema(TranslatedQuery::schema())
         .send(messages)
         .await?;

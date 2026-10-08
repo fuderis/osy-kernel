@@ -4537,13 +4537,14 @@ dependencies = [
 
 [[package]]
 name = "osy"
-version = "0.23.4"
+version = "0.23.5"
 dependencies = [
  "anylm",
  "atoman 0.12.1",
  "boa_engine",
  "chrono",
  "cistern",
+ "heck 0.5.0",
  "libc",
  "macron 0.5.2",
  "osy-share",

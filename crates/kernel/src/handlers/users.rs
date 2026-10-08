@@ -16,8 +16,8 @@ macro_rules! get_user {
 
 /// API: Handles user sessions list.
 #[log(uid = %*uid)]
-pub async fn handle_user_sessions_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
-    let count = payload.0.count.unwrap_or(0);
+pub async fn handle_user_sessions_list(uid: Paths<u64>, query: Json<ListQuery>) -> Response {
+    let count = query.0.count.unwrap_or(0);
 
     match UserState::list_sessions(*uid, count).await {
         Ok(sessions) => Response::ok().json(&sessions),
@@ -30,13 +30,15 @@ pub async fn handle_user_sessions_list(uid: Paths<u64>, payload: Json<ListQuery>
 
 /// API: Lists all user facts stored in RAG memory.
 #[log(uid = %*uid)]
-pub async fn handle_user_facts_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
+pub async fn handle_user_facts_list(uid: Paths<u64>, query: Json<ListQuery>) -> Response {
+    let count = query.0.count;
+
     let user = get_user!(*uid);
     let user_guard = user.read().await;
 
     match user_guard.load_facts().await {
         Ok(mut facts) => Response::ok().json({
-            if let Some(count) = payload.0.count {
+            if let Some(count) = count {
                 facts.truncate(count);
             };
             &facts
@@ -50,8 +52,8 @@ pub async fn handle_user_facts_list(uid: Paths<u64>, payload: Json<ListQuery>) -
 
 /// API: Vector search across user facts.
 #[log(uid = %*uid)]
-pub async fn handle_user_facts_search(uid: Paths<u64>, payload: Json<SearchQuery>) -> Response {
-    let SearchQuery { query, limit } = payload.0;
+pub async fn handle_user_facts_search(uid: Paths<u64>, query: Json<SearchQuery>) -> Response {
+    let SearchQuery { query, limit } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -70,8 +72,8 @@ pub async fn handle_user_facts_search(uid: Paths<u64>, payload: Json<SearchQuery
 
 /// Adds or updates user fact in RAG memory.
 #[log(uid = %*uid)]
-pub async fn handle_user_facts_set(uid: Paths<u64>, payload: Json<SetQuery>) -> Response {
-    let SetQuery { id, text } = payload.0;
+pub async fn handle_user_facts_set(uid: Paths<u64>, query: Json<SetQuery>) -> Response {
+    let SetQuery { id, text } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -98,8 +100,8 @@ pub async fn handle_user_facts_set(uid: Paths<u64>, payload: Json<SetQuery>) -> 
 
 /// API: Removes fact by its ID.
 #[log(uid = %*uid)]
-pub async fn handle_user_facts_remove(uid: Paths<u64>, payload: Json<RemoveQuery>) -> Response {
-    let RemoveQuery { id } = payload.0;
+pub async fn handle_user_facts_remove(uid: Paths<u64>, query: Json<RemoveQuery>) -> Response {
+    let RemoveQuery { id } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -130,8 +132,8 @@ pub async fn handle_user_facts_clear(uid: Paths<u64>) -> Response {
 
 /// API: Lists global rules for the specified user.
 #[log(uid = %*uid)]
-pub async fn handle_user_rules_list(uid: Paths<u64>, payload: Json<ListQuery>) -> Response {
-    let ListQuery { count } = payload.0;
+pub async fn handle_user_rules_list(uid: Paths<u64>, query: Json<ListQuery>) -> Response {
+    let ListQuery { count } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -152,8 +154,8 @@ pub async fn handle_user_rules_list(uid: Paths<u64>, payload: Json<ListQuery>) -
 
 /// API: Adds or updates a global user rule.
 #[log(uid = %*uid)]
-pub async fn handle_user_rules_set(uid: Paths<u64>, payload: Json<SetQuery>) -> Response {
-    let SetQuery { id, text } = payload.0;
+pub async fn handle_user_rules_set(uid: Paths<u64>, query: Json<SetQuery>) -> Response {
+    let SetQuery { id, text } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;
@@ -170,8 +172,8 @@ pub async fn handle_user_rules_set(uid: Paths<u64>, payload: Json<SetQuery>) -> 
 
 /// API: Removes a global user rule by ID.
 #[log(uid = %*uid)]
-pub async fn handle_user_rules_remove(uid: Paths<u64>, payload: Json<RemoveQuery>) -> Response {
-    let RemoveQuery { id } = payload.0;
+pub async fn handle_user_rules_remove(uid: Paths<u64>, query: Json<RemoveQuery>) -> Response {
+    let RemoveQuery { id } = query.0;
 
     let user = get_user!(*uid);
     let user_guard = user.read().await;

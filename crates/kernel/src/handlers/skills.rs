@@ -16,12 +16,10 @@ use osy_share::{Event, HandleQuery, SessionId, SessionInfo};
 /// API: Handles skill query.
 pub async fn handle_skill_query(
     paths: Paths<(SessionId, String)>,
-    payload: Json<HandleQuery>,
+    query: Json<HandleQuery>,
 ) -> Response {
     let (sid, skill_name) = paths.0;
-    warn!("HIT: sid={}, skill={}", sid, skill_name);
-
-    let HandleQuery { message } = payload.0;
+    let HandleQuery { current_path, message } = query.0;
 
     Response::ok().stream(move |tx| async move {
         let result = match Session::read(sid).await {
@@ -32,7 +30,7 @@ pub async fn handle_skill_query(
                 } else {
                     let session_info = session.lock().await.info.clone();
 
-                    match handle_skill(tx.clone(), session_info, &skill_name, message, true).await {
+                    match handle_skill(tx.clone(), session_info, &skill_name, message, current_path, true).await {
                         Ok(result_text) => {
                             let assistant_msg = Message::assistant(vec![result_text.clone().into()],vec![]);
                             if let Err(e) = session.lock().await.write_message(assistant_msg).await {
@@ -64,6 +62,7 @@ pub async fn handle_skill(
     session_info: SessionInfo,
     skill_name: &str,
     message: Message,
+    current_path: Option<PathBuf>,
     stream_answer: bool
 ) -> Result<String> {
     let Some(agent) = Manager::get_by_skill(skill_name).await else {
@@ -115,11 +114,7 @@ pub async fn handle_skill(
     tx.send(Event::Thinking(msg)).ok();
 
     let cfg = Config::get();
-    let provider_options = cfg
-        .completions
-        .options
-        .clone()
-        .temperature(cfg.completions.skill_temp);
+    let provider_options = cfg.llm.skill_options();
     let exec_options = &cfg.execution;
 
     // assembling context messages with config skill prompt & agent skill prompt
@@ -127,7 +122,7 @@ pub async fn handle_skill(
         let mut msgs = Messages::new();
         let mut system_content = vec![utils::system_prompt(&session_info, &cfg).into()];
 
-        let config_skill_prompt = cfg.prompts.skill_prompt.trim();
+        let config_skill_prompt = cfg.llm.skill_prompt();
         if !config_skill_prompt.is_empty() {
             system_content.push(config_skill_prompt.to_string().into());
         }
@@ -289,6 +284,7 @@ pub async fn handle_skill(
             let tx = tx.clone();
             let skill_name = skill_name.to_string();
             let session_info = session_info.clone();
+            let current_path = current_path.clone();
 
             sub_workers.spawn(
                 async move {
@@ -320,7 +316,7 @@ pub async fn handle_skill(
                             Ok((tool_call.id, format!("Memory Operation Result:\n{res_msg}")))
                         }
                         _ => {
-                            super::handle_tool(client, sock_path, agent_name, skill_name, tool_call, tx)
+                            super::handle_tool(client, sock_path, agent_name, skill_name, tool_call, current_path, tx)
                                 .await
                         }
                     }

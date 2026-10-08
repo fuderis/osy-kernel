@@ -66,6 +66,19 @@ async fn main() -> Result<()> {
                 "Restart the ecosystem (stop -> start).",
                 |ctx| async move { cmds::handle_server_restart(ctx.get("force")?).await },
             )
+            //    AGENTS
+            .cmd(
+                "agent list",
+                "Shows launched agents list.",
+                |_| async move { cmds::handle_agent_list().await },
+            )
+            .cmd(
+                "agent new {name} {descr..}",
+                "Creates a new agent from template.",
+                |ctx| async move {
+                    cmds::handle_agent_new(ctx.get("name")?, ctx.get_opt("descr")?).await
+                },
+            )
             //    HEALTH
             .cmd(
                 "status",

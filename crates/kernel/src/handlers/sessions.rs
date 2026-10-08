@@ -30,9 +30,9 @@ pub async fn handle_session_metadata(Paths(sid): Paths<SessionId>) -> Response {
 #[log(sid = %sid)]
 pub async fn handle_session_init(
     Paths(sid): Paths<SessionId>,
-    payload: Json<SessionInfo>,
+    query: Json<SessionInfo>,
 ) -> Response {
-    let session_info = payload.0;
+    let session_info = query.0;
     info!("Handling session init/get...");
 
     // check active session, or initialize a new one
@@ -83,9 +83,9 @@ pub async fn handle_session_finish(Paths(sid): Paths<SessionId>) -> Response {
 #[log(sid = %sid)]
 pub async fn handle_session_rename(
     Paths(sid): Paths<SessionId>,
-    payload: Json<RenameQuery>,
+    query: Json<RenameQuery>,
 ) -> Response {
-    let RenameQuery { name } = payload.0;
+    let RenameQuery { name } = query.0;
     info!("Renaming session `{sid}` to `{name}`...");
 
     let Some(session_shared) = Session::get(&sid).await else {
@@ -119,21 +119,17 @@ pub async fn handle_session_rename(
 #[log(sid = %sid)]
 pub async fn handle_session_compact(
     Paths(sid): Paths<SessionId>,
-    payload: Json<CompactQuery>,
+    query: Json<CompactQuery>,
 ) -> Response {
-    let CompactQuery { preserve } = payload.0;
+    let CompactQuery { preserve } = query.0;
     let current = Span::current();
 
     Response::ok().stream(move |tx| {
         async move {
             let cfg = Config::get();
             let preserve_count = preserve.unwrap_or(cfg.execution.preserve_messages);
-            let provider_options = cfg
-                .completions
-                .options
-                .clone()
-                .temperature(cfg.completions.compress_temp);
-            let compress_prompt = cfg.prompts.compress_prompt.clone();
+            let provider_options = cfg.llm.compress_options();
+            let compress_prompt = cfg.llm.compress_prompt();
 
             info!("Starting stream (preserve: {preserve_count})");
 
@@ -348,9 +344,9 @@ pub async fn handle_session_rules_list(Paths(sid): Paths<SessionId>) -> Response
 #[log(sid = %sid)]
 pub async fn handle_session_rules_set(
     Paths(sid): Paths<SessionId>,
-    payload: Json<SetQuery>,
+    query: Json<SetQuery>,
 ) -> Response {
-    let SetQuery { id, text } = payload.0;
+    let SetQuery { id, text } = query.0;
     info!("Setting rule (id: {id:?})...");
 
     info!("Looking up Session::get...");
@@ -394,9 +390,9 @@ pub async fn handle_session_rules_set(
 #[log(sid = %sid)]
 pub async fn handle_session_rules_remove(
     Paths(sid): Paths<SessionId>,
-    payload: Json<RemoveQuery>,
+    query: Json<RemoveQuery>,
 ) -> Response {
-    let rule_id = payload.0.id;
+    let rule_id = query.0.id;
     info!("Removing rule `{rule_id}`...");
 
     info!("Looking up Session::get...");

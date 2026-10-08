@@ -30,6 +30,7 @@ pub async fn handle_skill(
     tx: Sender<Bytes>,
     session_info: SessionInfo,
     messages: Arc<Mutex<Messages>>,
+    current_path: Option<PathBuf>,
     task: SkillAction,
 ) -> Result<()> {
     let skill_response = handlers::handle_skill(
@@ -37,6 +38,7 @@ pub async fn handle_skill(
         session_info,
         &task.skill,
         Message::user(vec![task.query.into()]),
+        current_path,
         false,
     )
     .await?;

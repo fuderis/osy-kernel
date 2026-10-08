@@ -16,14 +16,27 @@ use pearce::Callback;
 use rigging::widgets::Confirmation;
 
 /// API: User query handler.
-pub async fn handle_user_query(paths: Paths<SessionId>, data: Json<HandleQuery>) -> Response {
+pub async fn handle_user_query(paths: Paths<SessionId>, query: Json<HandleQuery>) -> Response {
     let sid = paths.0;
-    let HandleQuery { message } = data.0;
+    let HandleQuery {
+        current_path,
+        message,
+    } = query.0;
 
     Response::ok().stream(move |tx| async move {
         let result = match Session::read(sid).await {
             Ok((session, messages)) => {
-                handle_query(sid, tx.clone(), session, messages, message, false, 0).await
+                handle_query(
+                    sid,
+                    tx.clone(),
+                    session,
+                    messages,
+                    message,
+                    current_path,
+                    false,
+                    0,
+                )
+                .await
             }
             Err(e) => Err(e),
         };
@@ -44,14 +57,15 @@ async fn handle_query(
     session: Arc<Mutex<Session>>,
     messages: Arc<Mutex<Messages>>,
     message: Message,
+    current_path: Option<PathBuf>,
     is_control: bool,
     iteration: usize,
 ) -> Result<()> {
     info!("Processing the user query (iteration {iteration})...");
 
     let cfg = Config::get();
-    let provider_options = &cfg.completions.options;
-    let assist_prompt = &cfg.prompts.assist_prompt;
+    let provider_options = &cfg.llm.assist_options();
+    let assist_prompt = &cfg.llm.assist_prompt();
     let exec_options = &cfg.execution;
 
     // loop repeats the CURRENT iteration in case of an error
@@ -341,12 +355,19 @@ async fn handle_query(
             for task in agent_tasks {
                 let session = session.clone();
                 let messages = messages.clone();
+                let current_path = current_path.clone();
                 let tx = tx.clone();
 
                 workers.spawn(
                     async move {
-                        skills::handle_skill(tx, session.lock().await.info.clone(), messages, task)
-                            .await
+                        skills::handle_skill(
+                            tx,
+                            session.lock().await.info.clone(),
+                            messages,
+                            current_path,
+                            task,
+                        )
+                        .await
                     }
                     .log_span(Span::current()),
                 );
@@ -414,10 +435,20 @@ async fn handle_query(
                     "Sub-tasks finished. Launching control query (iteration {})...",
                     iteration + 1
                 );
-                let control_msg = Message::user(vec![cfg.prompts.control_prompt.as_str().into()])
+                let control_msg = Message::user(vec![cfg.llm.control_prompt().into()])
                     .visibility(Visibility::Internal);
 
-                handle_query(sid, tx, session, messages, control_msg, true, iteration + 1).await?;
+                handle_query(
+                    sid,
+                    tx,
+                    session,
+                    messages,
+                    control_msg,
+                    current_path,
+                    true,
+                    iteration + 1,
+                )
+                .await?;
             }
         } else {
             // if control request OR no actions (direct response to the user)

@@ -18,9 +18,8 @@ pub fn system_prompt(info: &SessionInfo, cfg: &Config) -> String {
     let now_utc = Utc::now();
     let now_local = utils::now_local(info.timezone);
 
-    cfg.prompts
-        .system_prompt
-        .trim()
+    cfg.llm
+        .system_prompt()
         .replace(
             "{SYSTEM_INFO}",
             &info

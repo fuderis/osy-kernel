@@ -1,3 +1,5 @@
+use crate::ToolQuery;
+
 use anylm::api::Tool;
 use pearce::stream::{Bytes, Sender};
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,6 @@ pub trait SkillExt {
         &self,
         tx: Sender<Bytes>,
         tool: String,
-        payload: JsonValue,
+        payload: ToolQuery<JsonValue>,
     ) -> impl Future<Output = Result<()>> + Send;
 }

@@ -83,7 +83,7 @@ pub async fn render_input(
             .placeholder("Enter instructions...".with(alt_color))
             .title(" Prompt ".bold().with(brand_color), Align::TopLeft)
             .title(
-                format!(" {} ", cfg.completions.options.model)
+                format!(" {} ", cfg.llm.completions.model)
                     .bold()
                     .with(brand_color),
                 Align::BottomLeft,
@@ -111,7 +111,7 @@ pub async fn render_input(
             let raw_cmd = args[0].trim_start_matches('/').to_lowercase();
             let clean_args: Vec<&str> = args[1..].iter().copied().filter(|&a| a != "-g").collect();
 
-            // Нормализуем команду/подкоманду и отделяем payload подкоманды от самой подкоманды
+            // normalize command/sub-command and separate payload
             let (cmd, sub_cmd, payload) = match raw_cmd.as_str() {
                 "remember" => ("facts".to_string(), "set".to_string(), clean_args.join(" ")),
                 "forget" => (
@@ -133,7 +133,7 @@ pub async fn render_input(
                 }
             };
 
-            // Payload для одиночных команд без подкоманд (например, /rename <name>)
+            // payload for single commands
             let top_payload = clean_args.join(" ");
 
             let sid = session_id.lock().await.clone();

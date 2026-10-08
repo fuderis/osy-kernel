@@ -16,7 +16,7 @@
 [package]
 name = "osy"
 description = "Ultra-Fast AI Kernel (experimental)."
-version = "0.23.4"
+version = "0.23.5"
 edition = "2024"
 
 [dependencies]
@@ -34,5 +34,6 @@ boa_engine.workspace = true
 libc.workspace = true
 rand.workspace = true
 regex.workspace = true
-whatlang = "0.18.0"
-sysinfo = "0.38.4"
+whatlang.workspace = true
+sysinfo.workspace = true
+heck.workspace = true

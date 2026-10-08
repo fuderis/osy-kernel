@@ -38,9 +38,6 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
             )
         });
 
-        // --------------------------------------------------------------------
-        // Формирование общего системного промпта для каждого скилла
-        // --------------------------------------------------------------------
         let base_prompt = format!(
             "Your domain responsibility: {}.\n\
             If the user request cannot be fulfilled within your tools domain, immediately report that you cannot perform it — do NOT execute random or unrelated functions.",
@@ -55,7 +52,7 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
 
         let description = meta.description;
 
-        // 1. Формируем элементы для skills_list()
+        // 1. Forming the elements for skills_list()
         skills_list_arms.push(quote! {
             ::osy_share::Skill::new(
                 str!(#enum_name::#variant_name),
@@ -64,19 +61,19 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
             )
         });
 
-        // 2. Формируем match-ветку для tools_list()
+        // 2. Create a match branch for tools_list()
         tools_list_arms.push(quote! {
             Self::#variant_name => #module::tools_list(),
         });
 
-        // 3. Формируем match-ветки для tool_call()
+        // 3. Creating match branches for tool_call()
         let mut tool_match_arms = Vec::new();
         for tool in meta.tools {
             let tool_str = &tool.name; // LitStr: "infra_sync_config"
             let handler_fn = &tool.handler; // Ident: handle_infra_sync_config
 
             tool_match_arms.push(quote! {
-                #tool_str => #module::#handler_fn(tx.clone(), ::serde_json::from_value(payload)?).await,
+                #tool_str => #module::#handler_fn(tx.clone(), payload.parse_payload()?).await,
             });
         }
 
@@ -104,7 +101,7 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
                 }
             }
 
-            async fn tool_call(&self, tx: Sender<Bytes>, tool: String, payload: JsonValue) -> Result<()> {
+            async fn tool_call(&self, tx: Sender<Bytes>, tool: String, payload: ::osy_share::ToolQuery<::serde_json::Value>) -> Result<()> {
                 match self {
                     #(#tool_call_arms)*
                 }

@@ -77,7 +77,14 @@ pub async fn handle_chat(
             warn!("{query_url}");
 
             // render response message
-            utils::render_response(query_url, HandleQuery { message: query_msg }).await?;
+            utils::render_response(
+                query_url,
+                HandleQuery {
+                    current_path: std::env::current_dir().ok(),
+                    message: query_msg,
+                },
+            )
+            .await?;
         }
 
         Ok::<(), DynError>(())
