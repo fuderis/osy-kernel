@@ -1,20 +1,20 @@
 use crate::{Manager, prelude::*};
 use osy_share::StatusData;
 
-/// API: Handles the server ping.
+/// API: Handles server ping.
 #[log()]
 pub async fn handle_ping() -> Response {
     Response::ok().text("pong")
 }
 
-/// API: Returns the server status & agents list.
+/// API: Returns server status & agents list.
 #[log()]
 pub async fn handle_status() -> Response {
     let agents_list = Manager::agents_list().await;
     Response::ok().json(&StatusData { agents_list })
 }
 
-/// API: Refreshes the server settings & agents list.
+/// API: Refreshes server config & agents list.
 #[log()]
 pub async fn handle_refresh() -> Response {
     // update settings

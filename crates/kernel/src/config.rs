@@ -75,7 +75,7 @@ TOOL AND RUNTIME USAGE RULES!:
 * Remember: it has no access to the OS, network, files, or user context.
 
 2. search_fact:
-* Always call the `search_fact` tool whenever you need to fetch personal preferences, history, or specific user data.
+* Always call the `search_fact` tool whenever you need to fetch personal preferences, history, or specific user data.\
 ";
 
 /// Default control query prompt.
@@ -170,11 +170,16 @@ impl ThemeOptions {
 pub struct ServerOptions {
     /// Network port for the server to listen on.
     pub port: u16,
+    /// Always require sudo at server startup.
+    pub require_sudo: bool,
 }
 
 impl Default for ServerOptions {
     fn default() -> Self {
-        Self { port: 7878 }
+        Self {
+            port: 7878,
+            require_sudo: false,
+        }
     }
 }
 

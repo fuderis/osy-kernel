@@ -1,7 +1,6 @@
 use crate::prelude::*;
 
 use anylm::api::{Message, Messages, Role, Visibility};
-use atoman::Command;
 use osy_share::{ListQuery, SessionId, SessionMetadata};
 use rigging::{
     Stylize,
@@ -9,61 +8,9 @@ use rigging::{
     style::{Align, BorderStyle},
     widgets::{ConfirmPrompt, Input, SelectMenu, Text},
 };
-use std::process::Stdio;
 
 pub const MIN_WIDTH: usize = 80;
 pub const INPUT_MAX_HEIGHT: usize = 20;
-
-/// Ensures that kernel server is started.
-pub async fn ensure_server(client: &Client, base_url: &str) -> Result<()> {
-    // verify whether the backend server is reachable
-    if client
-        .get(&format!("{base_url}/ping"))
-        .send()
-        .await
-        .is_err()
-    {
-        // attempt to auto-start backend process silently if offline
-        if Command::new(path!("$"))
-            .args(&["server", "start"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .is_ok()
-        {
-            let ping_url = format!("{base_url}/ping");
-            let mut is_ok = false;
-
-            // poll status endpoint until service responds or times out
-            for _ in 0..10 {
-                atoman::time::sleep(Duration::from_millis(1000)).await;
-                if client
-                    .get(&ping_url)
-                    .timeout(Duration::from_millis(1000))
-                    .send()
-                    .await
-                    .is_ok()
-                {
-                    is_ok = true;
-                    break;
-                }
-            }
-
-            // report timeout if service fails to respond
-            if !is_ok {
-                eprintln!(
-                    "{}: Server started but is not responding.",
-                    "Timeout".red().bold()
-                );
-            }
-        } else {
-            // log process spawning failure
-            eprintln!("{}: Failed to execute server", "Error".red().bold());
-        }
-    }
-
-    Ok(())
-}
 
 /// Interactive session selection from the list.
 pub async fn select_session(

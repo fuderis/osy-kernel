@@ -18,16 +18,12 @@ macro_rules! macos_proc_protect {
 #[cfg(unix)]
 #[macro_export]
 macro_rules! has_sudo_priv {
-    () => {
-        ::atoman::Command::new("sudo")
-            .args(["-n", "true"])
-            .stdout(::std::process::Stdio::null())
-            .stderr(::std::process::Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false)
-    };
+    () => {{
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        unsafe { geteuid() == 0 }
+    }};
 }
 
 #[cfg(unix)]
@@ -35,9 +31,9 @@ macro_rules! has_sudo_priv {
 macro_rules! ensure_sudo_priv {
     () => {
         if !$crate::has_sudo_priv!() {
-            return Err(Error::Custom(str!(
-                "Sudo privileges are required to perform this operation."
-            ))
+            return Err(Error::Custom(
+                "Sudo privileges are required to perform this operation.".into(),
+            )
             .into());
         }
     };

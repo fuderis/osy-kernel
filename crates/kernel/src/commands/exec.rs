@@ -17,10 +17,6 @@ pub async fn handle_tool_call(skill_name: &str, tool_name: &str, payload: String
 
     let port = Config::get().server.port;
     let base_url = format!("http://127.0.0.1:{port}");
-    let client = Client::tcp();
-
-    // refresh/start kernel server
-    utils::ensure_server(&client, &base_url).await?;
 
     // rendering response
     let url = format!("{base_url}/skills/{skill_name}/call/{tool_name}");
@@ -51,9 +47,6 @@ pub async fn handle_skill_query(
     let port = Config::get().server.port;
     let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::tcp();
-
-    // refresh/start kernel server
-    utils::ensure_server(&client, &base_url).await?;
 
     // select session or create new
     let sid = if new_session || uid == 0 {

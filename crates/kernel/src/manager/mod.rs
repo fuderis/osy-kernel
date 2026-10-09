@@ -98,18 +98,33 @@ impl Manager {
     pub async fn update() -> Result<()> {
         info!("[Manager] Starting agents update cycle...");
 
-        // collect the list of all the outdated agents:
         let mut to_restart = Vec::new();
+        let mut to_refresh = Vec::new();
+
+        // sort agents into those who need to restart and those who need to refresh
         {
             let guard = MANAGER.get();
             for (_name, agent) in guard.agents.to_hash().await {
                 if agent.read().await.check(true).await.unwrap_or(true) {
                     to_restart.push(agent);
+                } else {
+                    to_refresh.push(agent);
                 }
             }
         }
 
-        // stop all the outdated agents:
+        // call /refresh only for those agents who do not go to restart
+        for agent in to_refresh {
+            let agent = agent.read().await;
+            if let Err(e) = agent.refresh().await {
+                warn!(
+                    "[Manager] Error refreshing agent `{}`: {e}",
+                    agent.metadata.name
+                );
+            }
+        }
+
+        // stopping outdated agents
         for agent in to_restart {
             let agent = agent.read().await;
             let name = &agent.metadata.name;

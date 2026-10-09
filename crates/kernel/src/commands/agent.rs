@@ -10,6 +10,11 @@ pub async fn handle_agent_list() -> Result<()> {
     let port = str!(Config::get().server.port);
     let client = Client::tcp();
 
+    Print::h1("Receiving agents list:")
+        .margin_bottom(1)
+        .render()
+        .await?;
+
     let response = client
         .get(&format!("http://127.0.0.1:{port}/status"))
         .send()
@@ -67,8 +72,9 @@ pub async fn handle_agent_list() -> Result<()> {
 
 /// API: Handles new agent creation from template.
 pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()> {
-    let templ_path = "https://github.com/fuderis/osy-agent.git";
+    Print::h1("Creating new agent:").render().await?;
 
+    let templ_path = "https://github.com/fuderis/osy-agent.git";
     let folder_name = if name.starts_with("osy-") {
         name
     } else {
@@ -77,39 +83,59 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
 
     let process = async {
         // cloning repository
-        let status = Command::new("git")
-            .args(["clone", templ_path, &folder_name])
-            .status()
-            .await
-            .map_err(|e| Error::Custom(format!("Failed to execute git clone: {e}")))?;
+        Print::info(format!("Cloning into {folder_name}..."))
+            .margin_left(1)
+            .render()
+            .await?;
 
-        if !status.success() {
-            return Err(
-                Error::Custom(format!("git clone failed with status: {status}").into()).into(),
-            );
+        let output = Command::new("git")
+            .args(["clone", templ_path, &folder_name])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute git clone: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git clone failed: {}", stderr.trim()).into());
         }
 
         // removing old .git folder
         let git_dir = std::path::Path::new(&folder_name).join(".git");
         if git_dir.exists() {
+            Print::info("Cleaning up git metadata...")
+                .margin_left(1)
+                .render()
+                .await?;
+
             fs::remove_dir_all(&git_dir)
                 .await
                 .map_err(|e| format!("Failed to remove old .git directory: {e}"))?;
         }
 
         // init new .git index
-        let status = Command::new("git")
+        Print::info("Initializing new git repository...")
+            .margin_left(1)
+            .render()
+            .await?;
+
+        let output = Command::new("git")
             .arg("init")
             .current_dir(&folder_name)
-            .status()
+            .output()
             .await
             .map_err(|e| format!("Failed to execute git init: {e}"))?;
 
-        if !status.success() {
-            return Err(format!("git init failed with status: {status}").into());
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git init failed: {}", stderr.trim()).into());
         }
 
         // editing cargo configuration
+        Print::info("Updating Cargo configuration...")
+            .margin_left(1)
+            .render()
+            .await?;
+
         let cargo_path = std::path::Path::new(&folder_name).join("Cargo.toml");
         let content = fs::read_to_string(&cargo_path)
             .await
@@ -152,12 +178,14 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
             .await
             .map_err(|e| format!("Failed to update Cargo.toml: {e}"))?;
 
+        Print::success("Ready!").margin_left(1).render().await?;
+
         Ok::<_, DynError>(())
     };
 
     match process.await {
         Ok(()) => {
-            Print::info(format!("Successfully created agent: {folder_name}"))
+            Print::success(format!("Created agent {folder_name}."))
                 .margin_top(1)
                 .render()
                 .await?;

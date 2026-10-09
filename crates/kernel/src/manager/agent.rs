@@ -208,4 +208,35 @@ impl Agent {
 
         Ok(())
     }
+
+    /// Refreshes agent state via `/refresh` endpoint.
+    #[log()]
+    pub async fn refresh(&self) -> Result<()> {
+        let name = &self.metadata.name;
+        info!("[Manager] Refreshing `{name}` agent...");
+
+        let client = Client::ipc(&self.metadata.sock_path.to_string_lossy());
+
+        let response = time::timeout(Duration::from_secs(2), client.get("/refresh").send()).await;
+
+        match response {
+            Ok(Ok(res)) if res.status().is_success() => {
+                info!("[Manager] Agent `{name}` successfully refreshed.");
+            }
+            Ok(Ok(res)) => {
+                warn!(
+                    "[Manager] Agent `{name}` refresh returned status: {}",
+                    res.status()
+                );
+            }
+            Ok(Err(e)) => {
+                warn!("[Manager] Failed to send refresh request to `{name}`: {e}");
+            }
+            Err(_) => {
+                warn!("[Manager] Refresh request to `{name}` timed out.");
+            }
+        }
+
+        Ok(())
+    }
 }

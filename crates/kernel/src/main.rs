@@ -30,7 +30,7 @@ use manager::Manager;
 use pearce::Server;
 use prelude::*;
 
-use rigging::{CommandContext, Commands, Stylize, pkg_meta};
+use rigging::{CommandContext, Commands, pkg_meta, widgets::Print};
 
 #[atoman::main]
 async fn main() -> Result<()> {
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
             .run()
             .await
     {
-        eprintln!("{} {e}", "Error:".red().bold());
+        Print::error(e.to_string()).render().await?;
     }
 
     async fn handle_skill_execution(ctx: rigging::CommandContext) -> Result<()> {
@@ -167,6 +167,11 @@ async fn main() -> Result<()> {
 /// API: Handles server launching (inline).
 async fn serve(_: CommandContext) -> Result<()> {
     use crate::handlers as hands;
+
+    #[cfg(unix)]
+    if Config::get().server.require_sudo {
+        osy_share::ensure_sudo_priv!();
+    }
 
     // init logger & agents management
     Logger::init(path!("$state$/logs"), 1000).await?;

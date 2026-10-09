@@ -17,9 +17,6 @@ pub async fn handle_chat(
     let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::tcp();
 
-    // refresh/start kernel server
-    utils::ensure_server(&client, &base_url).await?;
-
     // select session or create new
     let sid = if new_session || uid == 0 {
         SessionId::new(uid)
