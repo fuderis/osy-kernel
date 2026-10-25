@@ -99,23 +99,16 @@ orchestration, or IPC engine design, feel free to open issues, submit pull reque
 
 ### Requirements
 * **OS:** `Linux`, `macOS`, `BSD`, `Windows`.
-* **Rust:** `nightly` toolchain.
-* **Dependencies:** `jq` (required by `build.sh`).
-
-### Clone repository
-
-```bash
-git clone https://github.com/fuderis/osy-kernel.git && cd osy-kernel
-```
+* **Rust:** 2024+ edition.
+* **Dependencies:** `jq` (required by `make build`).
 
 ### Build from source
 
-Automatically builds and installs Osy CLI on your system.
-
-> For Windows: install `Git Bash` before.
+For UNIX-like systems (Linux, macOS, BSD).
 
 ```bash
-bash build.sh
+git clone https://github.com/fuderis/osy-kernel.git && cd osy-kernel
+make install
 ```
 
 ### Run Osy CLI
@@ -126,7 +119,7 @@ osy --help
 
 ---
 
-## Licensing & Commercial Usage
+## Licensing
 
 This project is distributed under the [**GNU General Public License v3.0**](LICENSE.md).
 
@@ -135,4 +128,4 @@ This project is distributed under the [**GNU General Public License v3.0**](LICE
 * **Open Source Use:** You are free to use, modify, and deploy Osy in non-commercial or open-source projects in accordance with GPL-3.0.
 * **Commercial License:** To integrate the Osy kernel into proprietary commercial products without disclosing your source code, you must acquire a commercial license.
 
-> For commercial licensing inquiries and enterprise support, please contact the project author: **Bulat Sharipov** ([@fuderis](https://github.com/fuderis) / `synapdrake@ya.ru`).
+> For any questions, please contact the project author: **Bulat Sharipov** ([@fuderis](https://github.com/fuderis) / `synapdrake@ya.ru`).

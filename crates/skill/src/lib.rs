@@ -2,19 +2,22 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Expr, Ident, LitStr, Meta, parse_macro_input};
 
-struct ToolAttr {
+struct ToolMeta {
     name: LitStr,
+    description: LitStr,
     handler: Ident,
+    action_type: proc_macro2::TokenStream,
+    no_action: bool,
 }
 
 struct SkillMeta {
     module: Option<Ident>,
     description: String,
     prompt: String,
-    tools: Vec<ToolAttr>,
+    tools: Vec<ToolMeta>,
 }
 
-#[proc_macro_derive(AgentSkill, attributes(skill, tools))]
+#[proc_macro_derive(AgentSkill, attributes(skill, tool))]
 pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let enum_name = &input.ident;
@@ -52,7 +55,7 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
 
         let description = meta.description;
 
-        // 1. Forming the elements for skills_list()
+        // 1. Forming skills_list()
         skills_list_arms.push(quote! {
             ::osy_share::Skill::new(
                 str!(#enum_name::#variant_name),
@@ -61,21 +64,53 @@ pub fn derive_agent_skill(input: TokenStream) -> TokenStream {
             )
         });
 
-        // 2. Create a match branch for tools_list()
-        tools_list_arms.push(quote! {
-            Self::#variant_name => #module::tools_list(),
-        });
-
-        // 3. Creating match branches for tool_call()
+        // 2. Generating tools_list()
+        let mut tool_typed_tokens = Vec::new();
         let mut tool_match_arms = Vec::new();
-        for tool in meta.tools {
-            let tool_str = &tool.name; // LitStr: "infra_sync_config"
-            let handler_fn = &tool.handler; // Ident: handle_infra_sync_config
 
-            tool_match_arms.push(quote! {
-                #tool_str => #module::#handler_fn(tx.clone(), payload.parse_payload()?).await,
-            });
+        for tool in meta.tools {
+            let tool_name_str = tool.name;
+            let tool_desc = tool.description;
+            let handler_fn = tool.handler;
+            let action_type = tool.action_type;
+            let no_action = tool.no_action;
+
+            // selecting Tool constructor depends on no_action
+            let tool_constructor = if no_action {
+                quote! {
+                    Tool::new(
+                        #tool_name_str,
+                        #tool_desc,
+                    )
+                }
+            } else {
+                quote! {
+                    Tool::typed::<#action_type>(
+                        #tool_name_str,
+                        #tool_desc,
+                    )
+                }
+            };
+
+            tool_typed_tokens.push(tool_constructor);
+
+            // call processing depending on the availability of the action
+            if no_action {
+                tool_match_arms.push(quote! {
+                    #tool_name_str => #module::#handler_fn(tx.clone()).await,
+                });
+            } else {
+                tool_match_arms.push(quote! {
+                    #tool_name_str => #module::#handler_fn(tx.clone(), payload.parse_payload()?).await,
+                });
+            }
         }
+
+        tools_list_arms.push(quote! {
+            Self::#variant_name => vec![
+                #(#tool_typed_tokens,)*
+            ],
+        });
 
         tool_call_arms.push(quote! {
             Self::#variant_name => match tool.trim() {
@@ -120,7 +155,6 @@ fn parse_variant_attributes(variant_name: &Ident, attrs: &[Attribute]) -> SkillM
         tools: Vec::new(),
     };
 
-    // --- ПРОХОД 1: Извлекаем метаданные skill (module, description, prompt) ---
     for attr in attrs {
         if attr.path().is_ident("skill") {
             let nested = attr
@@ -157,37 +191,98 @@ fn parse_variant_attributes(variant_name: &Ident, attrs: &[Attribute]) -> SkillM
                     }
                 }
             }
-        }
-    }
-
-    // --- ПРОХОД 2: Прямое маппирование name -> handle_name ---
-    for attr in attrs {
-        if attr.path().is_ident("tools") {
-            let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
-            let nested = attr.parse_args_with(parser).unwrap_or_else(|err| {
-                panic!(
-                    "Failed to parse #[tools(...)] attribute on variant {}: {}",
-                    variant_name, err
+        } else if attr.path().is_ident("tool") {
+            let nested = attr
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
                 )
-            });
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to parse #[tool(...)] attribute on variant {}: {}",
+                        variant_name, err
+                    )
+                });
 
-            for expr in nested {
-                if let Expr::Lit(expr_lit) = expr {
-                    if let syn::Lit::Str(name_lit) = expr_lit.lit {
-                        let raw_name = name_lit.value().trim().to_string();
+            let mut tool_name: Option<LitStr> = None;
+            let mut tool_desc: Option<LitStr> = None;
+            let mut explicit_action: Option<String> = None;
+            let mut no_action = false;
 
-                        // Строго: "disk_list" -> "handle_disk_list"
-                        let handler_name = format!("handle_{}", raw_name);
-                        let handler = Ident::new(&handler_name, name_lit.span());
-                        let clean_lit = LitStr::new(&raw_name, name_lit.span());
-
-                        meta.tools.push(ToolAttr {
-                            name: clean_lit,
-                            handler,
-                        });
+            for item in nested {
+                match item {
+                    Meta::NameValue(nv) => {
+                        if nv.path.is_ident("name") {
+                            if let Expr::Lit(expr_lit) = nv.value {
+                                if let syn::Lit::Str(s) = expr_lit.lit {
+                                    tool_name = Some(s);
+                                }
+                            }
+                        } else if nv.path.is_ident("description") {
+                            if let Expr::Lit(expr_lit) = nv.value {
+                                if let syn::Lit::Str(s) = expr_lit.lit {
+                                    tool_desc = Some(s);
+                                }
+                            }
+                        } else if nv.path.is_ident("action") {
+                            if let Expr::Lit(expr_lit) = nv.value {
+                                if let syn::Lit::Str(s) = expr_lit.lit {
+                                    explicit_action = Some(s.value());
+                                }
+                            }
+                        }
                     }
+                    Meta::Path(path) => {
+                        if path.is_ident("no_action") {
+                            no_action = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
+
+            let name_lit = tool_name.expect("#[tool(name = \"...\")] is required");
+            let desc_lit = tool_desc.expect("#[tool(description = \"...\")] is required");
+            let raw_name = name_lit.value();
+
+            // handler's name is always output as handle_{raw_name}
+            let handler_name = format!("handle_{}", raw_name);
+            let module_ident = meta
+                .module
+                .as_ref()
+                .expect("Module must be specified before tools");
+            let handler = Ident::new(&handler_name, name_lit.span());
+
+            // defining type of action structure:
+            // 1. If an explicit action is specified (for example, action = "media::VolumeAction")
+            // 2. Otherwise, generate the rule ToolName + Action (PascalCase)
+            let action_type = if let Some(custom_action) = explicit_action {
+                let parsed_path: syn::Path = syn::parse_str(&custom_action)
+                    .unwrap_or_else(|_| panic!("Invalid action path string: `{}`", custom_action));
+                quote! { #parsed_path }
+            } else {
+                let pascal_name: String = raw_name
+                    .split('_')
+                    .map(|part| {
+                        let mut c = part.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().chain(c).collect(),
+                        }
+                    })
+                    .collect();
+
+                let struct_name = format!("{}Action", pascal_name);
+                let struct_ident = Ident::new(&struct_name, name_lit.span());
+                quote! { #module_ident::#struct_ident }
+            };
+
+            meta.tools.push(ToolMeta {
+                name: name_lit,
+                description: desc_lit,
+                handler,
+                action_type,
+                no_action,
+            });
         }
     }
 
