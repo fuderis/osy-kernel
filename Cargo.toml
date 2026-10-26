@@ -22,18 +22,18 @@ resolver = "3"
 osy-share.path = "crates/share"
 osy-skill.path = "crates/skill"
 
-atoman = { version = "0.12.1", features = ["full"] }
+atoman = { version = "0.12.2", features = ["full"] }
 macron = { version = "0.5.2", features = ["full"] }
 rigging = { version = "0.5.11", features = ["full"] }
-pearce = { version = "0.6.2", features = ["full"] }
+pearce = { version = "0.7.0", features = ["full"] }
 anylm = { version = "0.4.2", features = ["full"] }
 cistern = { version = "0.4.0", features = ["full"] }
 
-# atoman = { path = "../atoman", features = ["full"] }
-# rigging = { path = "../rigging", features = ["full"] }
-# pearce = { path = "../pearce", features = ["full"] }
-# anylm = { path = "../anylm", features = ["full"] }
-# cistern = { path = "../cistern", features = ["full"] }
+# atoman = { path = "../../crates/atoman", features = ["full"] }
+# rigging = { path = "../../crates/rigging", features = ["full"] }
+# pearce = { path = "../../crates/pearce", features = ["full"] }
+# anylm = { path = "../../crates/anylm", features = ["full"] }
+# cistern = { path = "../../crates/cistern", features = ["full"] }
 
 boa_engine = "0.21.1"
 serde = { version = "1.0.228", features = ["derive"] }

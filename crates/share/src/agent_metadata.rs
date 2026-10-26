@@ -14,23 +14,20 @@ pub struct AgentMeta {
     pub description: String,
     pub version: String,
     pub skills: HashMap<String, Skill>,
-    pub sock_name: String,
     pub sock_path: PathBuf,
 }
 
 impl AgentMeta {
     pub async fn init(pkg: PkgMeta, skills: Vec<Skill>) {
         let name = pkg.name.trim_start_matches("osy-").to_string();
-        let sock_name = format!("osy-{name}");
 
         AGENT_METADATA
             .set(Self {
+                sock_path: macron::path!("$cache/osy-{name}/socket.sock"),
                 name,
                 description: pkg.description.into(),
                 version: pkg.version.into(),
                 skills: skills.into_iter().map(|s| (s.name.clone(), s)).collect(),
-                sock_path: macron::path!("$temp/{sock_name}.sock"),
-                sock_name,
             })
             .await;
     }

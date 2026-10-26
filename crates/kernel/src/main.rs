@@ -168,11 +168,6 @@ async fn main() -> Result<()> {
 async fn serve(_: CommandContext) -> Result<()> {
     use crate::handlers as hands;
 
-    #[cfg(unix)]
-    if Config::get().server.require_sudo {
-        osy_share::ensure_sudo_priv!();
-    }
-
     // init logger & agents management
     Logger::init(path!("$state$/logs"), 1000).await?;
     Manager::init().await?;

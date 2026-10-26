@@ -48,7 +48,6 @@ pub async fn handle_agent_list() -> Result<()> {
         .field("Name", agent.name.trim())
         .field("Description", agent.description.trim())
         .field("Version", &agent.version)
-        .field("Socket Name", &agent.sock_name)
         .field("Socket Path", agent.sock_path.display().to_string());
 
         if !agent.skills.is_empty() {

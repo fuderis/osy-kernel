@@ -79,11 +79,6 @@ pub async fn handle_server_status() -> Result<()> {
 
 /// API: Handles server launching.
 pub async fn handle_server_start() -> Result<()> {
-    #[cfg(unix)]
-    if Config::get().server.require_sudo {
-        osy_share::ensure_sudo_priv!();
-    }
-
     Print::h1("Starting server:").render().await?;
 
     let cfg = Config::get();
@@ -93,15 +88,17 @@ pub async fn handle_server_start() -> Result<()> {
     let is_port_free = TcpListener::bind(format!("127.0.0.1:{port}")).is_ok();
 
     if is_port_free {
+        // spawning server process
         let mut child = Command::new(path!("$"))
             .arg("serve")
             .current_dir(path!("$/"))
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(false)
             .spawn()?;
 
-        match wait_for_server_start(&mut child, &client, &port, 10, Duration::from_millis(200))
+        // waiting server ping
+        match wait_for_server_start(&mut child, &client, &port, 30, Duration::from_millis(500))
             .await
         {
             Ok(()) => {
@@ -145,11 +142,6 @@ pub async fn handle_server_start() -> Result<()> {
 
 /// API: Handles server shutdown.
 pub async fn handle_server_stop(force: bool) -> Result<()> {
-    #[cfg(unix)]
-    if Config::get().server.require_sudo {
-        osy_share::ensure_sudo_priv!();
-    }
-
     Print::h1("Stopping server:").render().await?;
 
     let cfg = Config::get();
@@ -223,16 +215,32 @@ async fn wait_for_server_start(
     retries: usize,
     delay: Duration,
 ) -> Result<()> {
-    for _ in 0..retries {
+    for _ in 1..=retries {
+        // check whether child process has terminated prematurely
         if let Ok(Some(status)) = child.try_wait() {
-            let mut err_output = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = stderr.read_to_string(&mut err_output).await;
+            let mut combined_output = String::new();
+
+            // read stdout
+            if let Some(mut stdout) = child.stdout.take() {
+                let _ = stdout.read_to_string(&mut combined_output).await;
             }
 
-            let err_msg = err_output.trim();
-            if !err_msg.is_empty() {
-                return Err(err_msg.into());
+            // read stderr
+            if let Some(mut stderr) = child.stderr.take() {
+                let mut err_str = String::new();
+                if stderr.read_to_string(&mut err_str).await.is_ok() && !err_str.is_empty() {
+                    if !combined_output.is_empty() {
+                        combined_output.push('\n');
+                    }
+                    combined_output.push_str(&err_str);
+                }
+            }
+
+            let error_message = combined_output.trim();
+            if !error_message.is_empty() {
+                return Err(
+                    Error::Custom(format!("Server failed to start:\n{error_message}")).into(),
+                );
             } else {
                 return Err(Error::Custom(format!(
                     "Process exited prematurely with status: {status}"
@@ -241,15 +249,17 @@ async fn wait_for_server_start(
             }
         }
 
+        // check whether server has started and responds to /ping
         if ping_server(client, port).await {
             return Ok(());
         }
 
+        // delay between attempts
         sleep(delay).await;
     }
 
-    Err(Error::Custom(
-        "Server process spawned, but failed to respond to /ping in time.".to_string(),
-    )
+    Err(Error::Custom(format!(
+        "Server process spawned, but failed to respond to /ping after {retries} attempts."
+    ))
     .into())
 }

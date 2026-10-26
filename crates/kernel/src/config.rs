@@ -170,16 +170,11 @@ impl ThemeOptions {
 pub struct ServerOptions {
     /// Network port for the server to listen on.
     pub port: u16,
-    /// Always require sudo at server startup.
-    pub require_sudo: bool,
 }
 
 impl Default for ServerOptions {
     fn default() -> Self {
-        Self {
-            port: 7878,
-            require_sudo: false,
-        }
+        Self { port: 7878 }
     }
 }
 

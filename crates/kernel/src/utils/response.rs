@@ -1,11 +1,13 @@
 use crate::prelude::*;
 
-use osy_share::{CommandResult, DialogEvent, Event};
+use atoman::io::AsyncWriteExt;
+use osy_share::{CommandResult, Dialog, Event};
 use rigging::{
     Stylize,
     render::SubWidgetPosition,
     style::{Align, LineStyle, SpinnerStyle},
 };
+use std::process::Stdio;
 
 /// Renders CLI response widget.
 pub async fn render_response<T>(url: String, body: T) -> Result<()>
@@ -85,8 +87,68 @@ where
 
                             // --- Interactive Dialog Event Handling ---
                             Event::Dialog(dialog_event) => match dialog_event {
-                                // bash execution in background
-                                DialogEvent::Script { id, code } => {
+                                // bash execution in background with explicit sudo check
+                                Dialog::Script { id, code, use_sudo } => {
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        // if sudo is required, check ‘sudo -n true’ with suppressed output
+                                        let sudo_valid = if use_sudo {
+                                            atoman::process::Command::new("sudo")
+                                                .arg("-n")
+                                                .arg("true")
+                                                .stdout(Stdio::null())
+                                                .stderr(Stdio::null())
+                                                .status()
+                                                .await
+                                                .map(|s| s.success())
+                                                .unwrap_or(false)
+                                        } else {
+                                            true
+                                        };
+
+                                        // if sudo is needed but there is no valid session, request the password via the TUI widget
+                                        if use_sudo && !sudo_valid {
+                                            let input_block = super::input_widget()
+                                                .title(
+                                                    " [sudo] password required "
+                                                        .bold()
+                                                        .with(brand_color),
+                                                    Align::TopLeft,
+                                                )
+                                                .margin_bottom(1)
+                                                .secret(true);
+
+                                            if let Ok(password) = ctx
+                                                .show_sub_widget(
+                                                    input_block,
+                                                    SubWidgetPosition::Replace,
+                                                )
+                                                .await
+                                            {
+                                                if !password.trim().is_empty() {
+                                                    // validate and cache the session using sudo -S -v.
+                                                    if let Ok(mut child) =
+                                                        atoman::process::Command::new("sudo")
+                                                            .arg("-S")
+                                                            .arg("-v")
+                                                            .stdin(Stdio::piped())
+                                                            .stdout(Stdio::null())
+                                                            .stderr(Stdio::null())
+                                                            .spawn()
+                                                    {
+                                                        if let Some(mut stdin) = child.stdin.take()
+                                                        {
+                                                            let _ = stdin
+                                                                .write_all(password.as_bytes())
+                                                                .await;
+                                                        }
+                                                        let _ = child.wait().await;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     status_msg =
                                         Some(format!("{}", "Executing script...".italic().dim()));
 
@@ -98,6 +160,14 @@ where
                                     ctx.sync();
                                     ctx.notify();
 
+                                    #[cfg(target_os = "windows")]
+                                    let output = atoman::process::Command::new("cmd")
+                                        .arg("/C")
+                                        .arg(&code)
+                                        .output()
+                                        .await;
+
+                                    #[cfg(not(target_os = "windows"))]
                                     let output = atoman::process::Command::new("bash")
                                         .arg("-c")
                                         .arg(&code)
@@ -139,7 +209,7 @@ where
                                 }
 
                                 // action confirmation [y/n]
-                                DialogEvent::Confirm {
+                                Dialog::Confirm {
                                     id,
                                     prompt,
                                     default,
@@ -163,7 +233,7 @@ where
                                 }
 
                                 // prompt text input
-                                DialogEvent::Prompt {
+                                Dialog::Prompt {
                                     id,
                                     prompt,
                                     placeholder,
@@ -202,7 +272,7 @@ where
                                 }
 
                                 // secret input
-                                DialogEvent::Secret {
+                                Dialog::Secret {
                                     id,
                                     prompt,
                                     placeholder,
@@ -235,7 +305,7 @@ where
                                 }
 
                                 // select menu
-                                DialogEvent::Select { id, prompt, items } => {
+                                Dialog::Select { id, prompt, items } => {
                                     let select_block = super::select_widget(prompt, items);
 
                                     if let Ok(value) = ctx

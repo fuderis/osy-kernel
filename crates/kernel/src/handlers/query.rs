@@ -11,7 +11,7 @@ use anylm::{
     completions::{Chunk, Completions},
 };
 use atoman::task::JoinSet;
-use osy_share::{DialogEvent, Event, HandleQuery, Id};
+use osy_share::{Dialog, Event, HandleQuery, Id};
 use pearce::Callback;
 use rigging::widgets::Confirmation;
 
@@ -476,7 +476,7 @@ async fn ask_retry(tx: &Sender<Bytes>, prompt: String) -> Result<bool> {
     let id = Id::new().to_string();
     let mut callback = Callback::register(&id).await;
 
-    tx.send(Event::Dialog(DialogEvent::Confirm {
+    tx.send(Event::Dialog(Dialog::Confirm {
         id,
         prompt,
         default: Some(Confirmation::Yes),
