@@ -79,7 +79,8 @@ impl Dialog {
         tx: &Sender<Bytes>,
         code: impl Into<String>,
         use_sudo: bool,
-    ) -> Result<CommandResult> {
+        timeout: Duration,
+    ) -> Result<Option<CommandResult>> {
         let id = Id::new().to_string();
         let dialog = Self::Script {
             id,
@@ -87,13 +88,7 @@ impl Dialog {
             use_sudo,
         };
 
-        let res: Option<CommandResult> = dialog.dispatch(tx, Duration::from_secs(300)).await?;
-        Ok(res.unwrap_or(CommandResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-            success: true,
-        }))
+        dialog.dispatch(tx, timeout).await
     }
 
     /// Sends confirmation request [y/n].
@@ -101,7 +96,8 @@ impl Dialog {
         tx: &Sender<Bytes>,
         prompt: impl Into<String>,
         default: Option<Confirmation>,
-    ) -> Result<Confirmation> {
+        timeout: Duration,
+    ) -> Result<Option<Confirmation>> {
         let id = Id::new().to_string();
         let dialog = Self::Confirm {
             id,
@@ -109,8 +105,7 @@ impl Dialog {
             default,
         };
 
-        let res: Option<Confirmation> = dialog.dispatch(tx, Duration::from_secs(120)).await?;
-        Ok(res.unwrap_or(Confirmation::No))
+        dialog.dispatch(tx, timeout).await
     }
 
     /// Sends text input prompt.
@@ -120,6 +115,7 @@ impl Dialog {
         placeholder: Option<String>,
         default: Option<String>,
         multiline: Option<bool>,
+        timeout: Duration,
     ) -> Result<Option<String>> {
         let id = Id::new().to_string();
         let dialog = Self::Prompt {
@@ -130,7 +126,7 @@ impl Dialog {
             multiline,
         };
 
-        dialog.dispatch(tx, Duration::from_secs(120)).await
+        dialog.dispatch(tx, timeout).await
     }
 
     /// Sends text input prompt of secret data (passwords, tokens).
@@ -138,6 +134,7 @@ impl Dialog {
         tx: &Sender<Bytes>,
         prompt: impl Into<String>,
         placeholder: Option<String>,
+        timeout: Duration,
     ) -> Result<Option<String>> {
         let id = Id::new().to_string();
         let dialog = Self::Secret {
@@ -146,7 +143,7 @@ impl Dialog {
             placeholder,
         };
 
-        dialog.dispatch(tx, Duration::from_secs(120)).await
+        dialog.dispatch(tx, timeout).await
     }
 
     /// Sends drop‑down menu for selecting from a list.
@@ -154,7 +151,8 @@ impl Dialog {
         tx: &Sender<Bytes>,
         prompt: impl Into<String>,
         items: Vec<String>,
-    ) -> Result<Option<String>> {
+        timeout: Duration,
+    ) -> Result<Option<Option<usize>>> {
         let id = Id::new().to_string();
         let dialog = Self::Select {
             id,
@@ -162,7 +160,7 @@ impl Dialog {
             items,
         };
 
-        dialog.dispatch(tx, Duration::from_secs(120)).await
+        dialog.dispatch(tx, timeout).await
     }
 }
 

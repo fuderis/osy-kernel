@@ -44,7 +44,7 @@ build: check
 	@printf "  \033[32m✓\033[0m Compilation completed\n"
 
 # 4. Installing binaries in the system
-install: build
+install: stop build
 	@printf "\n\033[1mInstalling binaries\033[0m\n"
 	@if [[ -w "$(INSTALL_DIR)" ]]; then \
 		INSTALL_CMD="install"; \
