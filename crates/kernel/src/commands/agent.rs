@@ -6,7 +6,7 @@ use include_dir::{Dir, include_dir};
 use osy_share::StatusData;
 use rigging::{Stylize, widgets::Print};
 
-// Вшиваем папку crates/agent на этапе компиляции
+// Agent template files.
 static AGENT_TEMPLATE: Dir = include_dir!("$CARGO_MANIFEST_DIR/../agent");
 
 /// API: Handles agent list command.
@@ -83,7 +83,7 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
 
     let process = async {
         // Extracting embedded template files into clean folder name
-        Print::info(format!("Extracting template into {folder_name}..."))
+        Print::info(format!("Extracting template into {folder_name}ing...")) // or folder_name
             .margin_left(1)
             .render()
             .await?;
@@ -94,6 +94,27 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
         AGENT_TEMPLATE
             .extract(&folder_name)
             .map_err(|e| format!("Failed to extract agent template: {e}"))?;
+
+        // Processing README.md placeholders if it exists
+        let readme_path = std::path::Path::new(&folder_name).join("README.md");
+        if readme_path.exists() {
+            if let Ok(readme_content) = fs::read_to_string(&readme_path).await {
+                let capitalized_name = {
+                    let mut c = clean_name.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                };
+                let lower_name = clean_name.to_lowercase();
+
+                let updated_readme = readme_content
+                    .replace("AGENT_NAME", &capitalized_name)
+                    .replace("agent_name", &lower_name);
+
+                let _ = fs::write(&readme_path, updated_readme).await;
+            }
+        }
 
         // init new .git index
         Print::info("Initializing new git repository...")

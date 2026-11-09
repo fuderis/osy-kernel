@@ -139,18 +139,19 @@ For UNIX-like systems (Linux, macOS, BSD).
 
 ```bash
 git clone https://github.com/fuderis/osy-kernel.git osy && cd osy
-make install
+make install-all
 ```
 
-### CLI Usage
+### Usage examples
 
 ```bash
-osy help
+osy help        # prints help message
+osy test.hello  # prints "Hello, World!" message
 ```
 
 **Subcommands:**
 
-* `agent` — Shows launched agents `list` or creates `new`.
+* `agent` — Shows launched agents `list` or creates a `new` one.
 * `chat` — Enter interactive AI chat mode.
 * `config` — Open `config.toml` in the default system editor.
 * `do` — Executes agent skills directly.

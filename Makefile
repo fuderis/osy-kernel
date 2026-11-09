@@ -4,9 +4,7 @@ SHELL := /bin/bash
 SERVER_PORT ?= 7878
 INSTALL_DIR ?= /usr/local/bin
 
-.PHONY: all stop build install install-agents install-agent prepare
-
-all: install install-agents
+.PHONY: stop build install install-agents install-agent install-all prepare
 
 # 0. Helper: creates agents/ dir and copies /crates/agent as a stub to satisfy workspace glob
 prepare:
@@ -50,7 +48,7 @@ build: check
 	cargo build --release
 	@printf "  \033[32m✓\033[0m Compilation completed\n"
 
-# 4. Installing binaries in the system and starting the server
+# 4. Installing kernel in system
 install: stop build
 	@printf "\n\033[1mInstalling binaries\033[0m\n"
 	@if [[ -w "$(INSTALL_DIR)" ]]; then \
@@ -75,7 +73,7 @@ install: stop build
 	@printf "\n───────────────────────────────────────────────────────\n"
 	@osy server start
 
-# 5. Hot-updating a SINGLE agent by name
+# 5. Installing agent by name
 install-agent: prepare
 	@if [[ -z "$(name)" ]]; then \
 		echo "  ✗ Error: Agent name is required. Use: make install-agent name=<agent_name>" >&2; \
@@ -116,7 +114,7 @@ install-agent: prepare
 	done; \
 	printf "\033[32m✓\033[0m Agent $(name) updated successfully\n"
 
-# 6. Hot-updating ALL agents and refreshing the system
+# 6. Installing all agents
 install-agents: prepare
 	@agents_list=(); \
 	for d in agents/*/; do \
@@ -134,3 +132,6 @@ install-agents: prepare
 	done
 	@printf "\n───────────────────────────────────────────────────────\n"
 	@osy refresh
+
+# 7. Installing kernel & all agents
+install-all: install install-agents
