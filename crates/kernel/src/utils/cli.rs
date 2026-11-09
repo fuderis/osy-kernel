@@ -190,10 +190,11 @@ pub fn select_widget(prompt: impl Into<String>, items: Vec<String>) -> Block<Sel
     let bg_color = cfg.theme.bg_color();
 
     SelectMenu::new(prompt, items)
+        .markdown(true)
         .min_width(MIN_WIDTH)
         .border_style(BorderStyle::Rounded)
         .border_color(brand_color)
-        .select_color(brand_color)
+        .accent_color(brand_color)
         .background_color(bg_color)
         .padding_hor(1)
         .margin_bottom(1)

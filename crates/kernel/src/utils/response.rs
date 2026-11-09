@@ -149,8 +149,17 @@ where
                                         }
                                     }
 
-                                    status_msg =
-                                        Some(format!("{}", "Executing script...".italic().dim()));
+                                    let running_status = format!(
+                                        "{}\n{}",
+                                        "Executing script:".yellow().bold(),
+                                        code.lines()
+                                            .map(|l| format!("  {l}"))
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                            .dim()
+                                    );
+
+                                    status_msg = Some(running_status);
 
                                     update_ui(
                                         &mut ctx.state,

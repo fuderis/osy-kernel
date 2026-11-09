@@ -4537,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "osy"
-version = "0.24.1"
+version = "0.24.2"
 dependencies = [
  "anylm",
  "atoman 0.12.2",
@@ -5367,9 +5367,9 @@ dependencies = [
 
 [[package]]
 name = "rigging"
-version = "0.5.11"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b145035f9478fcb75eca97ae1769dd5e24b570b78220d42f71807250c0714d1"
+checksum = "29caef08e087d6a51520b76e20f81e6ab0e19c33fc947b2f891c460c1eac31f4"
 dependencies = [
  "adot-tree-sitter-toml",
  "async-trait",
