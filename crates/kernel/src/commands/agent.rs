@@ -2,8 +2,12 @@ use crate::prelude::*;
 
 use atoman::{Command, fs};
 use heck::ToPascalCase;
+use include_dir::{Dir, include_dir};
 use osy_share::StatusData;
 use rigging::{Stylize, widgets::Print};
+
+// Вшиваем папку crates/agent на этапе компиляции
+static AGENT_TEMPLATE: Dir = include_dir!("$CARGO_MANIFEST_DIR/../agent");
 
 /// API: Handles agent list command.
 pub async fn handle_agent_list() -> Result<()> {
@@ -69,47 +73,27 @@ pub async fn handle_agent_list() -> Result<()> {
     Ok(())
 }
 
-/// API: Handles new agent creation from template.
+/// API: Handles new agent creation from embedded template.
 pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()> {
     Print::h1("Creating new agent:").render().await?;
 
-    let templ_path = "https://github.com/fuderis/osy-agent.git";
-    let folder_name = if name.starts_with("osy-") {
-        name
-    } else {
-        format!("osy-{name}")
-    };
+    let clean_name = name.trim_start_matches("osy-");
+    let folder_name = clean_name.to_string();
+    let cargo_name = format!("osy-{clean_name}");
 
     let process = async {
-        // cloning repository
-        Print::info(format!("Cloning into {folder_name}..."))
+        // Extracting embedded template files into clean folder name
+        Print::info(format!("Extracting template into {folder_name}..."))
             .margin_left(1)
             .render()
             .await?;
 
-        let output = Command::new("git")
-            .args(["clone", templ_path, &folder_name])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to execute git clone: {e}"))?;
+        std::fs::create_dir_all(&folder_name)
+            .map_err(|e| format!("Failed to create destination directory: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("git clone failed: {}", stderr.trim()).into());
-        }
-
-        // removing old .git folder
-        let git_dir = std::path::Path::new(&folder_name).join(".git");
-        if git_dir.exists() {
-            Print::info("Cleaning up git metadata...")
-                .margin_left(1)
-                .render()
-                .await?;
-
-            fs::remove_dir_all(&git_dir)
-                .await
-                .map_err(|e| format!("Failed to remove old .git directory: {e}"))?;
-        }
+        AGENT_TEMPLATE
+            .extract(&folder_name)
+            .map_err(|e| format!("Failed to extract agent template: {e}"))?;
 
         // init new .git index
         Print::info("Initializing new git repository...")
@@ -129,7 +113,7 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
             return Err(format!("git init failed: {}", stderr.trim()).into());
         }
 
-        // editing cargo configuration
+        // editing cargo configuration with prefixed package name
         Print::info("Updating Cargo configuration...")
             .margin_left(1)
             .render()
@@ -154,7 +138,7 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
 
             if in_package_section {
                 if trimmed.starts_with("name ") || trimmed.starts_with("name=") {
-                    *line = format!("name = \"{folder_name}\"");
+                    *line = format!("name = \"{cargo_name}\"");
                 } else if let Some(ref description) = descr {
                     if trimmed.starts_with("description ") || trimmed.starts_with("description=") {
                         *line = format!("description = \"{description}\"");
@@ -184,10 +168,12 @@ pub async fn handle_agent_new(name: String, descr: Option<String>) -> Result<()>
 
     match process.await {
         Ok(()) => {
-            Print::success(format!("Created agent {folder_name}."))
-                .margin_top(1)
-                .render()
-                .await?;
+            Print::success(format!(
+                "Created agent {folder_name} (package: {cargo_name})."
+            ))
+            .margin_top(1)
+            .render()
+            .await?;
             Ok(())
         }
         Err(e) => Err(Error::Titled("Failed to create agent".into(), e.into()).into()),

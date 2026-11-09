@@ -14,7 +14,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 [workspace]
-members = ["crates/kernel", "crates/share", "crates/skill"]
+members = ["crates/kernel", "crates/share", "crates/skill", "agents/*"]
 default-members = ["crates/kernel"]
 resolver = "3"
 
@@ -48,6 +48,7 @@ uuid = { version = "1.10", features = ["v7", "fast-rng"] }
 whatlang = "0.18.0"
 sysinfo = "0.38.4"
 heck = "0.5.0"
+include_dir = "0.7.4"
 
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 quote = "1.0"

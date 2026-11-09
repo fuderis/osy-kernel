@@ -138,14 +138,14 @@ Memory in Osy is split across several managed layers:
 For UNIX-like systems (Linux, macOS, BSD).
 
 ```bash
-git clone https://github.com/fuderis/osy-kernel.git && cd osy-kernel
+git clone https://github.com/fuderis/osy-kernel.git osy && cd osy
 make install
 ```
 
 ### CLI Usage
 
 ```bash
-osy [COMMAND] [PATTERN] [OPTIONS]
+osy help
 ```
 
 **Subcommands:**

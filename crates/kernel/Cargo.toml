@@ -15,8 +15,8 @@
 
 [package]
 name = "osy"
-description = "Ultra-Fast AI Kernel (experimental)."
-version = "0.24.2"
+description = "AI-Powered Toolkit Kernel (Experimental)."
+version = "0.25.0"
 edition = "2024"
 
 [dependencies]
@@ -37,3 +37,4 @@ regex.workspace = true
 whatlang.workspace = true
 sysinfo.workspace = true
 heck.workspace = true
+include_dir.workspace = true
