@@ -4,17 +4,15 @@ SHELL := /bin/bash
 SERVER_PORT ?= 7878
 INSTALL_DIR ?= /usr/local/bin
 
-.PHONY: all stop build install install-agents install-agent prep-agents
+.PHONY: all stop build install install-agents install-agent prepare
 
-all: stop build install
+all: install install-agents
 
-# 0. Helper: creates agents/ dir and a stub to satisfy workspace glob
-prep-agents:
+# 0. Helper: creates agents/ dir and copies /crates/agent as a stub to satisfy workspace glob
+prepare:
 	@mkdir -p agents
 	@if [ ! "$$(ls -A agents 2>/dev/null)" ]; then \
-		mkdir -p agents/stub/src; \
-		printf '[package]\nname = "osy-stub"\nversion = "0.1.0"\nedition = "2024"\npublish = false\n\n[dependencies]\nosy-share.workspace = true\n' > agents/stub/Cargo.toml; \
-		touch agents/stub/src/lib.rs; \
+		cp -r crates/agent agents/; \
 	fi
 
 # 1. Stopping processes on a port
@@ -39,7 +37,7 @@ stop:
 	@printf "  \033[32m✓\033[0m Port $(SERVER_PORT) cleared\n"
 
 # 2. Verification of requirements
-check: prep-agents
+check: prepare
 	@printf "\n\033[1mChecking requirements\033[0m\n"
 	@command -v cargo >/dev/null 2>&1 || { echo "  ✗ cargo is not installed" >&2; exit 1; }
 	@command -v jq >/dev/null 2>&1    || { echo "  ✗ jq is not installed" >&2; exit 1; }
@@ -78,7 +76,7 @@ install: stop build
 	@osy server start
 
 # 5. Hot-updating a SINGLE agent by name
-install-agent: prep-agents
+install-agent: prepare
 	@if [[ -z "$(name)" ]]; then \
 		echo "  ✗ Error: Agent name is required. Use: make install-agent name=<agent_name>" >&2; \
 		exit 1; \
@@ -119,7 +117,7 @@ install-agent: prep-agents
 	printf "\033[32m✓\033[0m Agent $(name) updated successfully\n"
 
 # 6. Hot-updating ALL agents and refreshing the system
-install-agents: prep-agents
+install-agents: prepare
 	@agents_list=(); \
 	for d in agents/*/; do \
 		[[ -d "$$d" ]] || continue; \
